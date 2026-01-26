@@ -1,0 +1,42 @@
+{
+  "openai": {
+    "api_key": "",
+    "model": "gpt-3.5-turbo",
+    "max_tokens": 2000,
+    "temperature": 0.1,
+    "timeout": 30,
+    "max_retries": 3
+  },
+  "vllm": {
+    "base_url": "http://127.0.0.1:8000/v1",
+    "model_name": "Qwen2.5-VL-7B-Instruct",
+    "api_key": "EMPTY",
+    "max_tokens": 2000,
+    "temperature": 0.1,
+    "timeout": 30
+  },
+  "detection": {
+    "default_strategy": "local_yolo",
+    "fallback_enabled": true,
+    "auto_fallback": true,
+    "max_concurrent": 5
+  },
+  "agent": {
+    "name": "HybridMonitoringAgent",
+    "max_steps": 100,
+    "verbose": true,
+    "memory_size": 50,
+    "enable_tools": true,
+    "tools_enabled": [
+      "detect_image",
+      "safe_parse_json",
+      "draw_bboxes",
+      "process_video",
+      "generate_report"
+    ]
+  },
+  "debug": false,
+  "log_level": "INFO",
+  "cache_enabled": true,
+  "cache_dir": "./cache"
+}
