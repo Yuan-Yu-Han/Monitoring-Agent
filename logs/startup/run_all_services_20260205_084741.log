@@ -1,0 +1,26 @@
+======================================
+  监控系统统一启动脚本
+======================================
+📝 日志保存到: ./logs/startup/run_all_services_20260205_084741.log
+
+调试信息：
+  SCRIPT_DIR: /home/yuan0165/yyh/Monitoring-Agent/scripts
+  PROJECT_ROOT: /home/yuan0165/yyh/Monitoring-Agent
+  QWEN_VL_SCRIPT: /home/yuan0165/yyh/Monitoring-Agent/scripts/run_qwen_vl.sh
+  RTSP_SCRIPT: /home/yuan0165/yyh/Monitoring-Agent/scripts/run_rtsp.sh
+
+[1/2] 启动 vLLM API 服务...
+✅ vLLM 服务已启动 (PID: 351724)
+⏳ 等待 vLLM 服务就绪（约 30 秒）...
+启动 vLLM API 服务，日志保存到: ./logs/vllm/vllm_server_20260205_084741.log
+
+[2/2] 启动 RTSP 流服务...
+🔧 启动 mediamtx RTSP 服务器...
+📝 日志保存到: ./logs/rtsp/mediamtx_20260205_084811.log
+✅ mediamtx 已启动 (PID: 351858)
+
+⏳ 等待 RTSP 服务器就绪...
+🚀 正在推送 RTSP 流到:
+rtsp://127.0.0.1:8554/mystream
+📝 日志保存到: ./logs/rtsp/ffmpeg_20260205_084811.log
+

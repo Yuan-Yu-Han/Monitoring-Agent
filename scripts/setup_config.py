@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hybrid Agent 配置设置脚本 (调用已有 HybridAgentConfig)
+配置设置脚本 (调用已有 Config)
 """
 
 import sys
@@ -9,15 +9,15 @@ from pathlib import Path
 from dataclasses import asdict
 # 把项目根目录加到Python路径里
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
-from config import HybridAgentConfig
+from config import GlobalConfig
 
 
 
 def create_config_file():
-    print("🔧 Hybrid Agent 配置设置")
+    print("🔧 Agent 配置设置")
     print("=" * 50)
 
-    config = HybridAgentConfig()  # 先用默认值实例化
+    config = GlobalConfig()  # 先用默认值实例化
 
     print("\n📡 OpenAI 配置:")
     openai_api_key = input(f"请输入 OpenAI API 密钥 (当前: {'已设置' if config.openai.api_key else '未设置'}, 留空跳过): ").strip()
@@ -51,7 +51,7 @@ def create_config_file():
         config.agent.verbose = False
 
     # 保存配置文件
-    config_file = Path(__file__).parent.parent / "hybrid_agent_config.json"
+    config_file = Path(__file__).parent.parent / "config.json"
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(asdict(config), f, indent=2, ensure_ascii=False)
     print(f"\n✅ 配置文件已创建: {config_file}")
@@ -72,17 +72,17 @@ def create_config_file():
 def create_env_file():
     print("\n🔧 创建环境变量文件")
 
-    env_content = """# Hybrid Agent 环境变量配置
+    env_content = """# Agent 环境变量配置
 # 复制此文件为 .env 并填入真实的API密钥
 
 # OpenAI 配置
-OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-3.5-turbo
 
 # vLLM 配置
 VLLM_BASE_URL=http://127.0.0.1:8000/v1
 VLLM_MODEL_NAME=Qwen2.5-VL-7B-Instruct
-VLLM_API_KEY=EMPTY
+VLLM_API_KEY=
 
 # 系统配置
 HYBRID_AGENT_DEBUG=false
@@ -99,7 +99,7 @@ HYBRID_AGENT_DEBUG=false
 def test_config():
     print("\n🧪 测试配置")
 
-    config_path = Path(__file__).parent.parent / "hybrid_agent_config.json"
+    config_path = Path(__file__).parent.parent / "config.json"
     if not config_path.exists():
         print(f"❌ 配置文件不存在: {config_path}")
         return
@@ -141,7 +141,7 @@ def test_config():
 
 
 def main():
-    print("🚀 Hybrid Agent 配置设置向导")
+    print("🚀 Agent 配置设置向导")
     print("=" * 50)
 
     while True:

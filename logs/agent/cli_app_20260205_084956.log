@@ -1,0 +1,83 @@
+2026-02-05 08:50:03,585 - src.agent_interface - INFO - Agent 处理用户查询: 你好
+2026-02-05 08:50:05,918 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:50:35,161 - src.agent_interface - INFO - Agent 处理用户查询: 请帮我检测一下在input文件夹里的fire1.jpg
+2026-02-05 08:50:36,170 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:50:46,281 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:50:53,593 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:50:58,136 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:51:02,211 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:51:08,791 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:51:13,847 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 08:51:41,469 - src.agent_interface - INFO - Agent 处理用户查询: 再见
+2026-02-05 08:51:42,106 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 09:00:36,440 - src.agent_interface - INFO - Agent 处理用户查询: 帮我检测一下fire1图片
+2026-02-05 09:00:37,273 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 09:00:40,327 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 09:00:43,762 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-05 09:00:43,796 - httpx - INFO - HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-05 09:00:43,797 - src.agent_interface - ERROR - Agent 处理用户查询失败: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, your request has 4151 input tokens. Please reduce the length of the input messages. (parameter=input_tokens, value=4151) None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+Traceback (most recent call last):
+  File "/home/yuan0165/yyh/Monitoring-Agent/src/agent_interface.py", line 316, in handle_user_query
+    response = self._invoke_agent(prompt, image_data, config={"configurable": {"thread_id": "user_query"}})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/yyh/Monitoring-Agent/src/agent_interface.py", line 488, in _invoke_agent
+    result = self.agent.invoke({"messages": messages}, config=config)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/yyh/Monitoring-Agent/src/hybrid_monitoring_agent.py", line 73, in invoke
+    result = self.agent.invoke(input_text, config=config, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langgraph/pregel/main.py", line 3071, in invoke
+    for chunk in self.stream(
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langgraph/pregel/main.py", line 2646, in stream
+    for _ in runner.tick(
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langgraph/pregel/_runner.py", line 167, in tick
+    run_with_retry(
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langgraph/pregel/_retry.py", line 42, in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langgraph/_internal/_runnable.py", line 656, in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langgraph/_internal/_runnable.py", line 400, in invoke
+    ret = self.func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain/agents/factory.py", line 1166, in model_node
+    response = _execute_model_sync(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain/agents/factory.py", line 1137, in _execute_model_sync
+    output = model_.invoke(messages)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain_core/runnables/base.py", line 5557, in invoke
+    return self.bound.invoke(
+           ^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 402, in invoke
+    self.generate_prompt(
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 1121, in generate_prompt
+    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 931, in generate
+    self._generate_with_cache(
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain_core/language_models/chat_models.py", line 1233, in _generate_with_cache
+    result = self._generate(
+             ^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain_openai/chat_models/base.py", line 1386, in _generate
+    raise e
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/langchain_openai/chat_models/base.py", line 1381, in _generate
+    raw_response = self.client.with_raw_response.create(**payload)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/openai/_legacy_response.py", line 364, in wrapped
+    return cast(LegacyAPIResponse[R], func(*args, **kwargs))
+                                      ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/openai/_utils/_utils.py", line 286, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/openai/resources/chat/completions/completions.py", line 1192, in create
+    return self._post(
+           ^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/openai/_base_client.py", line 1294, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/yuan0165/.conda/envs/vllm/lib/python3.11/site-packages/openai/_base_client.py", line 1067, in request
+    raise self._make_status_error_from_response(err.response) from None
+openai.BadRequestError: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, your request has 4151 input tokens. Please reduce the length of the input messages. (parameter=input_tokens, value=4151) None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+During task with name 'model' and id 'a6c2b208-a2bb-d340-1c47-90740a912b4d'

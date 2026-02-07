@@ -1,0 +1,10 @@
+2026/02/05 08:36:41 INF MediaMTX v1.15.6
+2026/02/05 08:36:41 INF configuration loaded from /home/yuan0165/mediamtx_v1.15.6_linux_amd64/mediamtx.yml
+2026/02/05 08:36:41 INF [RTSP] listener opened on :8554 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2026/02/05 08:36:41 INF [RTMP] listener opened on :1935
+2026/02/05 08:36:41 INF [HLS] listener opened on :8888
+2026/02/05 08:36:41 INF [WebRTC] listener opened on :8889 (HTTP), :8189 (ICE/UDP)
+2026/02/05 08:36:41 INF [SRT] listener opened on :8890 (UDP)
+2026/02/05 08:36:44 INF [RTSP] [conn 127.0.0.1:44204] opened
+2026/02/05 08:36:44 INF [RTSP] [session 5d34e8b7] created by 127.0.0.1:44204
+2026/02/05 08:36:44 INF [RTSP] [session 5d34e8b7] is publishing to path 'mystream', 2 tracks (H264, MPEG-4 Audio)

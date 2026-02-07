@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTSP 摄像头实时预览</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            max-width: 1000px;
+            width: 100%;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .status {
+            display: flex;
+            gap: 30px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }
+
+        .status-item {
+            flex: 1;
+            text-align: center;
+        }
+
+        .status-label {
+            color: #999;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .status-value {
+            color: #333;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .status-value.connected {
+            color: #4caf50;
+        }
+
+        .status-value.disconnected {
+            color: #f44336;
+        }
+
+        .indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .indicator.connected {
+            background-color: #4caf50;
+        }
+
+        .indicator.disconnected {
+            background-color: #f44336;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .video-container img {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+        }
+
+        .loading {
+            color: #999;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+
+        .btn-secondary:hover {
+            background: #efefef;
+        }
+
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            border-radius: 4px;
+            color: #1976d2;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .info-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .stats {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .stats-row:last-child {
+            margin-bottom: 0;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 22px;
+            }
+
+            .status {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            button {
+                flex: 1;
+                min-width: 120px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📹 RTSP 摄像头实时预览</h1>
+            <p>Mac 摄像头通过 RTSP + WebSocket 实时传输</p>
+        </div>
+
+        <div class="status">
+            <div class="status-item">
+                <div class="status-label">连接状态</div>
+                <div class="status-value disconnected" id="connection-status">
+                    <span class="indicator disconnected" id="indicator"></span>
+                    未连接
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-label">帧率</div>
+                <div class="status-value" id="fps">0 FPS</div>
+            </div>
+            <div class="status-item">
+                <div class="status-label">已接收帧</div>
+                <div class="status-value" id="frames">0</div>
+            </div>
+        </div>
+
+        <div class="video-container">
+            <img id="video-stream" style="display: none;" alt="视频流">
+            <div class="loading" id="loading-text">等待连接到服务器...</div>
+        </div>
+
+        <div class="controls">
+            <button class="btn-primary" onclick="reconnect()">重新连接</button>
+            <button class="btn-secondary" onclick="toggleStats()">显示统计</button>
+        </div>
+
+        <div class="stats" id="stats" style="display: none;">
+            <div class="stats-row">
+                <span>连接时间:</span>
+                <span id="connection-time">--:--:--</span>
+            </div>
+            <div class="stats-row">
+                <span>平均帧率:</span>
+                <span id="avg-fps">0 FPS</span>
+            </div>
+            <div class="stats-row">
+                <span>当前帧号:</span>
+                <span id="frame-number">0</span>
+            </div>
+            <div class="stats-row">
+                <span>服务器地址:</span>
+                <span id="server-addr">--</span>
+            </div>
+        </div>
+
+        <div class="info">
+            <div class="info-title">ℹ️ 使用说明</div>
+            <div>
+                1. 确保运行 RTSP 推流: <code>./push.sh</code><br>
+                2. 启动 WebSocket 服务器: <code>python server.py</code><br>
+                3. 在浏览器中访问: <code>http://127.0.0.1:5001</code><br>
+                4. 摄像头画面将实时显示在下方
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // 获取服务器地址（支持通过 URL 参数或当前页面地址）
+        const serverUrl = new URLSearchParams(window.location.search).get('server') || window.location.origin;
+        const socket = io(serverUrl, {
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: 5,
+            transports: ['websocket', 'polling']
+        });
+        
+        const videoStream = document.getElementById('video-stream');
+        const loadingText = document.getElementById('loading-text');
+        const connectionStatus = document.getElementById('connection-status');
+        const indicator = document.getElementById('indicator');
+        const fpsDisplay = document.getElementById('fps');
+        const framesDisplay = document.getElementById('frames');
+        const statsDiv = document.getElementById('stats');
+
+        let frameCount = 0;
+        let lastFrameTime = Date.now();
+        let currentFps = 0;
+        let startTime = null;
+        let isStatsVisible = false;
+
+        // WebSocket 连接事件
+        socket.on('connect', () => {
+                console.log('已连接到 WebSocket 服务器');
+                connectionStatus.textContent = '✓ 已连接';
+                connectionStatus.classList.remove('disconnected');
+                connectionStatus.classList.add('connected');
+                indicator.classList.remove('disconnected');
+                indicator.classList.add('connected');
+            indicator.textContent = '';
+                indicator.innerHTML = '<span class="indicator connected"></span>';
+                loadingText.textContent = '等待摄像头数据...';
+                startTime = Date.now();
+                updateConnectionTime();
+                    setInterval(updateConnectionTime, 1000);
+        });
+
+        socket.on('disconnect', () => {
+            console.log('已断开 WebSocket 连接');
+            connectionStatus.textContent = '✗ 未连接';
+            connectionStatus.classList.add('disconnected');
+            connectionStatus.classList.remove('connected');
+            indicator.classList.add('disconnected');
+            indicator.classList.remove('connected');
+            indicator.innerHTML = '<span class="indicator disconnected"></span>';
+            loadingText.textContent = '连接已断开，正在尝试重新连接...';
+            videoStream.style.display = 'none';
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('连接错误:', error);
+            loadingText.textContent = `连接错误: ${error.message}`;
+        });
+
+                        // 接收视频帧
+        socket.on('frame', (data) => {
+                        videoStream.src = data.image;
+                        videoStream.style.display = 'block';
+                        loadingText.style.display = 'none';
+
+                        frameCount = data.frame_number || frameCount + 1;
+                        framesDisplay.textContent = frameCount;
+                        document.getElementById('frame-number').textContent = frameCount;
+
+                        // 计算 FPS
+                        const currentTime = Date.now();
+                        const timeDiff = (currentTime - lastFrameTime) / 1000;
+                        if (timeDiff > 0.1) {
+                            currentFps = (1 / timeDiff).toFixed(1);
+                            fpsDisplay.textContent = currentFps + ' FPS';
+                            document.getElementById('avg-fps').textContent = currentFps + ' FPS';
+                            lastFrameTime = currentTime;
+                        }
+        });
+
+        socket.on('connection_response', (data) => {
+                        console.log('服务器响应:', data);
+        });
+
+        function reconnect() {
+            socket.disconnect();
+            setTimeout(() => {
+                socket.connect();
+            }, 1000);
+        }
+
+        function toggleStats() {
+            isStatsVisible = !isStatsVisible;
+            statsDiv.style.display = isStatsVisible ? 'block' : 'none';
+        }
+
+        function updateConnectionTime() {
+            if (!startTime) return;
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            const hours = Math.floor(elapsed / 3600);
+            const minutes = Math.floor((elapsed % 3600) / 60);
+            const seconds = elapsed % 60;
+            document.getElementById('connection-time').textContent =
+                `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
+        // 显示服务器地址
+        document.getElementById('server-addr').textContent = serverUrl;
+
+            console.log('页面已加载，服务器地址:', serverUrl);
+    </script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+    "default": "检测图像中的所有目标对象",
+    "fire_focus": "重点检测火灾和烟雾情况", 
+    "safety_focus": "重点检测人员安全装备",
+    "vehicle_focus": "重点检测车辆类型和状态",
+    "emergency": "紧急情况检测，重点关注危险因素"

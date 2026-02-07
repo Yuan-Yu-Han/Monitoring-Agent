@@ -55,10 +55,17 @@ class AgentConfig:
 
 
 @dataclass
-class HybridAgentConfig:
+class IOConfig:
+    input_dir: str = "./inputs"  # 默认输入目录
+    output_dir: str = "./outputs"  # 默认输出目录
+
+
+@dataclass
+class GlobalConfig:
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     vllm: VLLMConfig = field(default_factory=VLLMConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
+    io: IOConfig = field(default_factory=IOConfig)  # 添加 IOConfig
     agent: AgentConfig = field(default_factory=AgentConfig)
     
     debug: bool = False
@@ -113,6 +120,7 @@ class HybridAgentConfig:
             "openai": asdict(self.openai),
             "vllm": asdict(self.vllm),
             "detection": asdict(self.detection),
+            "io": asdict(self.io),  # 添加 IOConfig 到字典
             "agent": asdict(self.agent),
             "system": {
                 "debug": self.debug,
@@ -127,7 +135,7 @@ class HybridAgentConfig:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
 
     @classmethod
-    def load_from_file(cls, file_path: str) -> "HybridAgentConfig":
+    def load_from_file(cls, file_path: str) -> "GlobalConfig":
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"配置文件不存在: {file_path}")
 
@@ -155,21 +163,21 @@ class HybridAgentConfig:
         )
 
 
-def load_config() -> HybridAgentConfig:
+def load_config() -> GlobalConfig:
     """优先从 JSON 文件加载配置，再用环境变量覆盖敏感信息"""
-    config_path = Path(__file__).parent/ "hybrid_agent_config.json" # 配置文件与 config.py 在同一目录
+    config_path = Path(__file__).parent/ "config.json" # 配置文件与 config.py 在同一目录
     if not config_path.exists():
         print(f"⚠️ 配置文件 {config_path} 不存在，使用默认配置")
-        config = HybridAgentConfig()
+        config = GlobalConfig()
     else:
-        config = HybridAgentConfig.load_from_file(str(config_path))
+        config = GlobalConfig.load_from_file(str(config_path))
 
     # 环境变量覆盖已经在 __post_init__ 内实现，所以这里不用重复做
 
     return config
 
 
-def print_config(config: HybridAgentConfig):
+def print_config(config: GlobalConfig):
     print("=== Hybrid Agent 配置信息 ===")
     print("\n[OpenAI]")
     print(f"  API Key: {'已设置' if config.openai.api_key else '未设置'}")
@@ -217,7 +225,7 @@ if __name__ == "__main__":
 
 
 '''
-在 HybridAgentConfig 类：
+在 GlobalConfig 类：
 __post_init__(self)
 dataclass 的特殊方法，实例化后自动调用。这里它会从环境变量加载一些敏感配置（如API Key等），并创建缓存目录（如果启用）。
 _load_from_env(self)
@@ -228,11 +236,11 @@ to_dict(self) -> Dict[str, Any]
 把整个配置实例转成Python字典，方便写入JSON或者打印。
 save_to_file(self, file_path: str)
 将配置保存为JSON文件。
-@classmethod load_from_file(cls, file_path: str) -> HybridAgentConfig
-从JSON文件读取配置，构造一个HybridAgentConfig实例。
+@classmethod load_from_file(cls, file_path: str) -> GlobalConfig
+从JSON文件读取配置，构造一个GlobalConfig实例。
 '''
 
 '''
 你这样写多个平行的 @dataclass（OpenAIConfig, VLLMConfig 等）没问题。
-然后用一个主配置类 HybridAgentConfig 持有它们的实例（聚合关系），这很合理。
+然后用一个主配置类 GlobalConfig 持有它们的实例（聚合关系），这很合理。
 '''
