@@ -8,7 +8,7 @@ MODEL="/projects/yuan0165/Qwen3-VL-8B-Instruct"
 PORT=8000
 
 # 创建日志目录
-LOG_DIR="./logs/vllm"
+LOG_DIR="./logs/vllm/qwen_vl"
 mkdir -p $LOG_DIR
 
 # 创建 outputs 目录（用于 PID 文件）

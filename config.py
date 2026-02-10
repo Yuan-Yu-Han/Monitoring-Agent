@@ -21,12 +21,20 @@ class OpenAIConfig:
 
 
 @dataclass
-class VLLMConfig:
+class VLLMChatConfig:
     base_url: str = "http://127.0.0.1:8000/v1"
-    model_name: str = "Qwen2.5-VL-7B-Instruct"
+    model_name: str = "Qwen3-VL-8B-Instruct"
     api_key: str = ""
     max_tokens: int = 2000
     temperature: float = 0.1
+    timeout: int = 30
+
+
+@dataclass
+class VLLMEmbedConfig:
+    base_url: str = "http://127.0.0.1:8001/v1"
+    model_name: str = "Qwen3-VL-Embedding-2B"
+    api_key: str = ""
     timeout: int = 30
 
 
@@ -61,12 +69,25 @@ class IOConfig:
 
 
 @dataclass
+class RAGConfig:
+    chunk_max_chars: int = 800
+    chunk_overlap: int = 120
+    dense_k: int = 3
+    sparse_k: int = 5
+    rrf_k: int = 60
+    rerank_k: int = 10
+    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+
+@dataclass
 class GlobalConfig:
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
-    vllm: VLLMConfig = field(default_factory=VLLMConfig)
+    vllm_chat: VLLMChatConfig = field(default_factory=VLLMChatConfig)
+    vllm_embed: VLLMEmbedConfig = field(default_factory=VLLMEmbedConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     io: IOConfig = field(default_factory=IOConfig)  # 添加 IOConfig
     agent: AgentConfig = field(default_factory=AgentConfig)
+    rag: RAGConfig = field(default_factory=RAGConfig)
     
     debug: bool = False
     log_level: str = "INFO"
@@ -81,12 +102,18 @@ class GlobalConfig:
     def _load_from_env(self):
         if not self.openai.api_key:
             self.openai.api_key = os.getenv("OPENAI_API_KEY", "")
-        if not self.vllm.api_key or self.vllm.api_key == "EMPTY":
-            self.vllm.api_key = os.getenv("VLLM_API_KEY", "EMPTY")
+        if not self.vllm_chat.api_key or self.vllm_chat.api_key == "EMPTY":
+            self.vllm_chat.api_key = os.getenv("VLLM_API_KEY", "EMPTY")
+        if not self.vllm_embed.api_key or self.vllm_embed.api_key == "EMPTY":
+            self.vllm_embed.api_key = os.getenv("VLLM_EMBED_API_KEY", "EMPTY")
 
         self.openai.model = os.getenv("OPENAI_MODEL", self.openai.model)
-        self.vllm.base_url = os.getenv("VLLM_BASE_URL", self.vllm.base_url)
-        self.vllm.model_name = os.getenv("VLLM_MODEL_NAME", self.vllm.model_name)
+        self.vllm_chat.base_url = os.getenv("VLLM_BASE_URL", self.vllm_chat.base_url)
+        self.vllm_chat.model_name = os.getenv("VLLM_MODEL_NAME", self.vllm_chat.model_name)
+        self.vllm_embed.base_url = os.getenv("VLLM_EMBED_BASE_URL", self.vllm_embed.base_url)
+        self.vllm_embed.model_name = os.getenv(
+            "VLLM_EMBED_MODEL_NAME", self.vllm_embed.model_name
+        )
 
         if os.getenv("HYBRID_AGENT_DEBUG", "").lower() in ("true", "1", "yes"):
             self.debug = True
@@ -97,8 +124,10 @@ class GlobalConfig:
 
         if not self.openai.api_key:
             result["warnings"].append("OpenAI API密钥未设置，在线API策略将不可用")
-        if not self.vllm.api_key or self.vllm.api_key == "EMPTY":
+        if not self.vllm_chat.api_key or self.vllm_chat.api_key == "EMPTY":
             result["warnings"].append("vLLM API密钥未设置，本地Agent策略可能不可用")
+        if not self.vllm_embed.model_name:
+            result["warnings"].append("vLLM embedding模型未设置，RAG向量检索不可用")
 
         valid_strategies = ["local_yolo", "qwen_vl", "online_api"]
         if self.detection.default_strategy not in valid_strategies:
@@ -113,15 +142,30 @@ class GlobalConfig:
             result["errors"].append("OpenAI temperature必须在0到2之间")
             result["valid"] = False
 
+        if self.rag.chunk_max_chars <= 0:
+            result["errors"].append("rag_chunk_max_chars必须大于0")
+            result["valid"] = False
+        if self.rag.chunk_overlap < 0:
+            result["errors"].append("rag_chunk_overlap必须大于等于0")
+            result["valid"] = False
+        if self.rag.dense_k <= 0 or self.rag.sparse_k <= 0:
+            result["errors"].append("rag_dense_k和rag_sparse_k必须大于0")
+            result["valid"] = False
+        if self.rag.rerank_k < 0:
+            result["errors"].append("rag_rerank_k必须大于等于0")
+            result["valid"] = False
+
         return result
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "openai": asdict(self.openai),
-            "vllm": asdict(self.vllm),
+            "vllm_chat": asdict(self.vllm_chat),
+            "vllm_embed": asdict(self.vllm_embed),
             "detection": asdict(self.detection),
             "io": asdict(self.io),  # 添加 IOConfig 到字典
             "agent": asdict(self.agent),
+            "rag": asdict(self.rag),
             "system": {
                 "debug": self.debug,
                 "log_level": self.log_level,
@@ -146,16 +190,30 @@ class GlobalConfig:
             return datadict.get(key, default)
 
         openai_data = get_section(data, "openai", {})
-        vllm_data = get_section(data, "vllm", {})
+        vllm_data = get_section(data, "vllm_chat", {})
+        vllm_embed_data = get_section(data, "vllm_embed", {})
         detection_data = get_section(data, "detection", {})
         agent_data = get_section(data, "agent", {})
         system_data = get_section(data, "system", {})
+        rag_data = get_section(data, "rag", {})
 
         return cls(
             openai=OpenAIConfig(**openai_data),
-            vllm=VLLMConfig(**vllm_data),
+            vllm_chat=VLLMChatConfig(**vllm_data),
+            vllm_embed=VLLMEmbedConfig(**vllm_embed_data),
             detection=DetectionConfig(**detection_data),
             agent=AgentConfig(**agent_data),
+            rag=RAGConfig(
+                chunk_max_chars=rag_data.get("chunk_max_chars", 800),
+                chunk_overlap=rag_data.get("chunk_overlap", 120),
+                dense_k=rag_data.get("dense_k", 3),
+                sparse_k=rag_data.get("sparse_k", 5),
+                rrf_k=rag_data.get("rrf_k", 60),
+                rerank_k=rag_data.get("rerank_k", 10),
+                rerank_model=rag_data.get(
+                    "rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+                ),
+            ),
             debug=system_data.get("debug", False),
             log_level=system_data.get("log_level", "INFO"),
             cache_enabled=system_data.get("cache_enabled", True),
@@ -177,6 +235,9 @@ def load_config() -> GlobalConfig:
     return config
 
 
+config = load_config()
+
+
 def print_config(config: GlobalConfig):
     print("=== Hybrid Agent 配置信息 ===")
     print("\n[OpenAI]")
@@ -185,10 +246,29 @@ def print_config(config: GlobalConfig):
     print(f"  Max Tokens: {config.openai.max_tokens}")
     print(f"  Temperature: {config.openai.temperature}")
 
-    print("\n[vLLM]")
-    print(f"  Base URL: {config.vllm.base_url}")
-    print(f"  Model Name: {config.vllm.model_name}")
-    print(f"  API Key: {'已设置' if config.vllm.api_key and config.vllm.api_key != 'EMPTY' else '未设置'}")
+    print("\n[vLLM Chat]")
+    print(f"  Base URL: {config.vllm_chat.base_url}")
+    print(f"  Model Name: {config.vllm_chat.model_name}")
+    print(
+        "  API Key: "
+        + (
+            "已设置"
+            if config.vllm_chat.api_key and config.vllm_chat.api_key != "EMPTY"
+            else "未设置"
+        )
+    )
+
+    print("\n[vLLM Embedding]")
+    print(f"  Base URL: {config.vllm_embed.base_url}")
+    print(f"  Model Name: {config.vllm_embed.model_name}")
+    print(
+        "  API Key: "
+        + (
+            "已设置"
+            if config.vllm_embed.api_key and config.vllm_embed.api_key != "EMPTY"
+            else "未设置"
+        )
+    )
 
     print("\n[Detection]")
     print(f"  Default Strategy: {config.detection.default_strategy}")

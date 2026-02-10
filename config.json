@@ -1,18 +1,24 @@
 {
   "openai": {
-    "api_key": "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",
+    "api_key": "",
     "model": "gpt-3.5-turbo",
     "max_tokens": 2000,
     "temperature": 0.1,
     "timeout": 30,
     "max_retries": 3
   },
-  "vllm": {
+  "vllm_chat": {
     "base_url": "http://127.0.0.1:8000/v1",
-    "model_name": "Qwen2.5-VL-7B-Instruct",
+    "model_name": "Qwen3-VL-8B-Instruct",
     "api_key": "EMPTY",
     "max_tokens": 2000,
     "temperature": 0.1,
+    "timeout": 30
+  },
+  "vllm_embed": {
+    "base_url": "http://127.0.0.1:8001/v1",
+    "model_name": "Qwen3-VL-Embedding-2B",
+    "api_key": "EMPTY",
     "timeout": 30
   },
   "detection": {
@@ -38,6 +44,15 @@
       "process_video",
       "generate_report"
     ]
+  },
+  "rag": {
+    "chunk_max_chars": 800,
+    "chunk_overlap": 120,
+    "dense_k": 3,
+    "sparse_k": 5,
+    "rrf_k": 60,
+    "rerank_k": 10,
+    "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2"
   },
   "debug": false,
   "log_level": "INFO",

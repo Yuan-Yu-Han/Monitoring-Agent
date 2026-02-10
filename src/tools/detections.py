@@ -40,12 +40,12 @@ def detect_image(input_image: str) -> str:
         ]
 
         log_tool_step("调用 Qwen-VL 模型...")
-        client = OpenAI(api_key=config.vllm.api_key, base_url=config.vllm.base_url)
+        client = OpenAI(api_key=config.vllm_chat.api_key, base_url=config.vllm_chat.base_url)
         chat_response = client.chat.completions.create(
             model="Qwen3-VL-8B-Instruct",
             messages=messages,
-            max_tokens=config.vllm.max_tokens,
-            temperature=config.vllm.temperature,
+            max_tokens=config.vllm_chat.max_tokens,
+            temperature=config.vllm_chat.temperature,
         )
 
         log_tool_step("解析模型响应...")

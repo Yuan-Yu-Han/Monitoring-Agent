@@ -27,13 +27,29 @@ def create_config_file():
     if openai_model:
         config.openai.model = openai_model
 
-    print("\n🖥️  vLLM 配置:")
-    vllm_base_url = input(f"vLLM 服务器地址 (当前: {config.vllm.base_url}, 留空跳过): ").strip()
+    print("\n🖥️  vLLM Chat 配置:")
+    vllm_base_url = input(
+        f"vLLM Chat 服务器地址 (当前: {config.vllm_chat.base_url}, 留空跳过): "
+    ).strip()
     if vllm_base_url:
-        config.vllm.base_url = vllm_base_url
-    vllm_model = input(f"vLLM 模型名称 (当前: {config.vllm.model_name}, 留空跳过): ").strip()
+        config.vllm_chat.base_url = vllm_base_url
+    vllm_model = input(
+        f"vLLM Chat 模型名称 (当前: {config.vllm_chat.model_name}, 留空跳过): "
+    ).strip()
     if vllm_model:
-        config.vllm.model_name = vllm_model
+        config.vllm_chat.model_name = vllm_model
+
+    print("\n🧠 vLLM Embedding 配置:")
+    vllm_embed_base_url = input(
+        f"vLLM Embedding 服务器地址 (当前: {config.vllm_embed.base_url}, 留空跳过): "
+    ).strip()
+    if vllm_embed_base_url:
+        config.vllm_embed.base_url = vllm_embed_base_url
+    vllm_embed_model = input(
+        f"vLLM Embedding 模型名称 (当前: {config.vllm_embed.model_name}, 留空跳过): "
+    ).strip()
+    if vllm_embed_model:
+        config.vllm_embed.model_name = vllm_embed_model
 
     print("\n🎯 检测配置:")
     default_strategy = input(f"默认检测策略 (当前: {config.detection.default_strategy}, 留空跳过): ").strip()
@@ -50,6 +66,43 @@ def create_config_file():
     elif verbose in ['n', 'no']:
         config.agent.verbose = False
 
+    print("\n📚 RAG 配置:")
+    rag_chunk_max_chars = input(
+        f"RAG chunk_max_chars (当前: {config.rag.chunk_max_chars}, 留空跳过): "
+    ).strip()
+    if rag_chunk_max_chars:
+        config.rag.chunk_max_chars = int(rag_chunk_max_chars)
+    rag_chunk_overlap = input(
+        f"RAG chunk_overlap (当前: {config.rag.chunk_overlap}, 留空跳过): "
+    ).strip()
+    if rag_chunk_overlap:
+        config.rag.chunk_overlap = int(rag_chunk_overlap)
+    rag_dense_k = input(
+        f"RAG dense_k (当前: {config.rag.dense_k}, 留空跳过): "
+    ).strip()
+    if rag_dense_k:
+        config.rag.dense_k = int(rag_dense_k)
+    rag_sparse_k = input(
+        f"RAG sparse_k (当前: {config.rag.sparse_k}, 留空跳过): "
+    ).strip()
+    if rag_sparse_k:
+        config.rag.sparse_k = int(rag_sparse_k)
+    rag_rrf_k = input(
+        f"RAG rrf_k (当前: {config.rag.rrf_k}, 留空跳过): "
+    ).strip()
+    if rag_rrf_k:
+        config.rag.rrf_k = int(rag_rrf_k)
+    rag_rerank_k = input(
+        f"RAG rerank_k (当前: {config.rag.rerank_k}, 留空跳过): "
+    ).strip()
+    if rag_rerank_k:
+        config.rag.rerank_k = int(rag_rerank_k)
+    rag_rerank_model = input(
+        f"RAG rerank_model (当前: {config.rag.rerank_model}, 留空跳过): "
+    ).strip()
+    if rag_rerank_model:
+        config.rag.rerank_model = rag_rerank_model
+
     # 保存配置文件
     config_file = Path(__file__).parent.parent / "config.json"
     with open(config_file, "w", encoding="utf-8") as f:
@@ -60,8 +113,10 @@ def create_config_file():
     print("\n📋 配置摘要:")
     print(f"   OpenAI API密钥: {'已设置' if config.openai.api_key else '未设置'}")
     print(f"   OpenAI 模型: {config.openai.model}")
-    print(f"   vLLM 地址: {config.vllm.base_url}")
-    print(f"   vLLM 模型: {config.vllm.model_name}")
+    print(f"   vLLM Chat 地址: {config.vllm_chat.base_url}")
+    print(f"   vLLM Chat 模型: {config.vllm_chat.model_name}")
+    print(f"   vLLM Embedding 地址: {config.vllm_embed.base_url}")
+    print(f"   vLLM Embedding 模型: {config.vllm_embed.model_name}")
     print(f"   默认策略: {config.detection.default_strategy}")
     print(f"   Agent 名称: {config.agent.name}")
     print(f"   详细模式: {config.agent.verbose}")
@@ -79,10 +134,15 @@ def create_env_file():
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-3.5-turbo
 
-# vLLM 配置
+# vLLM Chat 配置
 VLLM_BASE_URL=http://127.0.0.1:8000/v1
 VLLM_MODEL_NAME=Qwen2.5-VL-7B-Instruct
 VLLM_API_KEY=
+
+# vLLM Embedding 配置
+VLLM_EMBED_BASE_URL=http://127.0.0.1:8001/v1
+VLLM_EMBED_MODEL_NAME=Qwen3-VL-Embedding-2B
+VLLM_EMBED_API_KEY=
 
 # 系统配置
 HYBRID_AGENT_DEBUG=false
