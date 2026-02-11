@@ -8,7 +8,7 @@ MODEL="/projects/yuan0165/Qwen3-VL-8B-Instruct"
 PORT=8000
 
 # 创建日志目录
-LOG_DIR="./logs/vllm/qwen_vl"
+LOG_DIR="./logs/services/qwen_vl"
 mkdir -p $LOG_DIR
 
 # 创建 outputs 目录（用于 PID 文件）
@@ -28,7 +28,7 @@ python3 -m vllm.entrypoints.openai.api_server \
     --host 0.0.0.0 \
     --port $PORT \
     --tensor-parallel-size 1 \
-    --max-model-len 4096 \
+    --max-model-len 2048 \
     --dtype=float16 \
     --gpu-memory-utilization 0.85 \
     --enable-auto-tool-choice \

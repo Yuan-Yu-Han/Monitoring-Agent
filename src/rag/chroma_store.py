@@ -13,12 +13,13 @@ from src.rag.types import Chunk
 
 
 def _vllm_embed(text: str) -> List[float]:
-    base_url = config.vllm_chat.base_url.rstrip("/")
+    # 使用 embedding 服务配置，避免误用 chat 服务
+    base_url = config.vllm_embed.base_url.rstrip("/")
     url = f"{base_url}/embeddings"
-    payload = {"model": config.vllm_chat.model_name, "input": text}
+    payload = {"model": config.vllm_embed.model_name, "input": text}
     headers = {}
-    if config.vllm_chat.api_key and config.vllm_chat.api_key != "EMPTY":
-        headers["Authorization"] = f"Bearer {config.vllm_chat.api_key}"
+    if config.vllm_embed.api_key and config.vllm_embed.api_key != "EMPTY":
+        headers["Authorization"] = f"Bearer {config.vllm_embed.api_key}"
     response = requests.post(url, json=payload, headers=headers, timeout=60)
     response.raise_for_status()
     data = response.json()
@@ -76,7 +77,7 @@ def dense_retrieve(query: str, k: int = 3, persist_dir: str | None = None) -> Li
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=k,
-        include=["documents", "metadatas", "ids"],
+        include=["documents", "metadatas"],
     )
 
     docs = results.get("documents", [[]])[0]

@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from typing import Dict, Iterable, List, Tuple
 
+from dataclasses import dataclass
+from typing import List
 from src.rag.types import Chunk
+
+
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^\)]+\)")

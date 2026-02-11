@@ -26,7 +26,7 @@ MEDIAMTX_BIN="/home/yuan0165/mediamtx_v1.15.6_linux_amd64/mediamtx"
 MEDIAMTX_CONFIG="/home/yuan0165/mediamtx_v1.15.6_linux_amd64/mediamtx.yml"
 
 # 创建日志目录
-LOG_DIR="./logs/rtsp"
+LOG_DIR="./logs/services/rtsp"
 mkdir -p $LOG_DIR
 
 # 生成带时间戳的日志文件名

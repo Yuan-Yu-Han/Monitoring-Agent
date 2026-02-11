@@ -6,7 +6,7 @@
 MODEL="/projects/yuan0165/Qwen3-VL-Embedding-2B"
 PORT=8001
 
-LOG_DIR="./logs/vllm/qwen_embed"
+LOG_DIR="./logs/services/qwen_embed"
 mkdir -p "$LOG_DIR"
 
 OUTPUT_DIR="./outputs"
@@ -19,17 +19,16 @@ echo "启动 vLLM Embedding 服务，日志保存到: $LOG_FILE"
 
 python3 -m vllm.entrypoints.openai.api_server \
     --model "$MODEL" \
-    --served-model-name Qwen3-VL-Embedding-2B \
+    --served-model-name text-embedding-3-small \
+    --runner pooling \
+    --convert embed \
     --host 0.0.0.0 \
     --port "$PORT" \
     --tensor-parallel-size 1 \
     --max-model-len 4096 \
     --dtype float16 \
-    --gpu-memory-utilization 0.85 \
-    --max-num-seqs 32 \
-    --max-num-batched-tokens 4096 \
-    --enable-prefix-caching \
-    > "$LOG_FILE" 2>&1 &
+    --gpu-memory-utilization 0.3 \
+    > "$LOG_FILE" 2>&1
 
 
 echo $! > "$OUTPUT_DIR/vllm_embed_server.pid"

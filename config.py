@@ -33,7 +33,7 @@ class VLLMChatConfig:
 @dataclass
 class VLLMEmbedConfig:
     base_url: str = "http://127.0.0.1:8001/v1"
-    model_name: str = "Qwen3-VL-Embedding-2B"
+    model_name: str = "text-embedding-3-small"
     api_key: str = ""
     timeout: int = 30
 
@@ -70,8 +70,8 @@ class IOConfig:
 
 @dataclass
 class RAGConfig:
-    chunk_max_chars: int = 800
-    chunk_overlap: int = 120
+    chunk_max_chars: int = 400
+    chunk_overlap: int = 80
     dense_k: int = 3
     sparse_k: int = 5
     rrf_k: int = 60

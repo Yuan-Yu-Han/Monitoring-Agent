@@ -17,7 +17,7 @@
   },
   "vllm_embed": {
     "base_url": "http://127.0.0.1:8001/v1",
-    "model_name": "Qwen3-VL-Embedding-2B",
+    "model_name": "text-embedding-3-small",
     "api_key": "EMPTY",
     "timeout": 30
   },
