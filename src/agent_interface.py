@@ -240,7 +240,11 @@ class AgentInterface:
             image_data = self._encode_image(event.frame) if event.frame is not None else None
             
             # 调用 Agent
-            response = self._invoke_agent(prompt, image_data, config={"configurable": {"thread_id": "event_1"}})
+            response = self._invoke_agent(
+                prompt,
+                config={"configurable": {"thread_id": "event_1"}},
+                stream=True
+            )
             
             # 添加到对话记忆
             if self.enable_memory:
@@ -310,7 +314,11 @@ class AgentInterface:
             image_data = self._encode_image(image) if image is not None else None
             
             # 调用 Agent
-            response = self._invoke_agent(prompt, image_data, config={"configurable": {"thread_id": "user_query"}})
+            response = self._invoke_agent(
+                prompt,
+                config={"configurable": {"thread_id": "user_query"}},
+                stream=True
+            )
             
             # 添加 Assistant 消息到对话记忆
             if self.enable_memory:
@@ -447,9 +455,9 @@ class AgentInterface:
     
     def _invoke_agent(
         self, 
-        prompt: str, 
-        image_data: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None
+        prompt: str,
+        config: Optional[Dict[str, Any]] = None,
+        stream: bool = False
     ) -> str:
         """
         调用 Agent
@@ -473,25 +481,52 @@ class AgentInterface:
         if hasattr(self.agent, 'invoke'):
             # LangChain Agent 或实现了 invoke 方法的 Agent
             try:
-                # 使用 HumanMessage 对象而不是字典
                 messages = [HumanMessage(content=prompt)]
-                
-                print("\n" + "="*60)
-                print("🤖 Agent 开始思考...")
-                print("="*60)
-                
-                # 如果提供了 config，使用 config 参数调用
+
+                if stream and hasattr(self.agent, "stream"):
+                    result_text = None
+                    for chunk in self.agent.stream(
+                        {"messages": messages},
+                        stream_mode="updates",
+                        config=config
+                    ):
+                        if stream_mode == "messages":
+                            token, metadata = data
+                            content = None
+                            if hasattr(token, "content_blocks"):
+                                content = token.content_blocks
+                            elif hasattr(token, "content"):
+                                content = token.content
+                            if content:
+                                print(content, end="", flush=True)
+                        elif stream_mode == "updates":
+                            for step, update in data.items():
+                                last_message = update.get("messages", [])[-1]
+                                tool_calls = getattr(last_message, "tool_calls", None)
+                                if tool_calls:
+                                    tool_names = []
+                                    for call in tool_calls:
+                                        if isinstance(call, dict):
+                                            tool_names.append(call.get("name", "unknown"))
+                                        else:
+                                            tool_names.append(getattr(call, "name", "unknown"))
+                                    print(f"\n[tools] {', '.join(tool_names)}")
+                                if hasattr(last_message, "content") and last_message.content:
+                                    result_text = last_message.content
+                                elif isinstance(last_message, dict):
+                                    result_text = last_message.get("content", result_text)
+
+                    if result_text:
+                        return result_text
+
+                    return ""
+
                 if config:
                     result = self.agent.invoke({"messages": messages}, config=config)
                 else:
                     result = self.agent.invoke({"messages": messages})
-                
-                # 显示 Agent 的执行过程（如果有 step_callback）
-                print("✅ Agent 思考完成")
-                print("="*60 + "\n")
-                
+
             except TypeError:
-                # 有些 Agent 的 invoke 可能需要其他参数
                 if config:
                     result = self.agent.invoke(prompt, config=config)
                 else:
