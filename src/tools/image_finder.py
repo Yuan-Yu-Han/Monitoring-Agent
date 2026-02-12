@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from difflib import SequenceMatcher
 from langchain.tools import tool
-from src.tools.tool_interceptor import log_tool_call, log_tool_step, log_tool_result, log_tool_error
 
 
 # Common image directories

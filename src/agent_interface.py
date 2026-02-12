@@ -19,8 +19,8 @@ from enum import Enum
 from langchain_core.messages import HumanMessage
 
 from src.system.event_trigger import DetectionEvent, MonitorState
-from src.tools.tool_interceptor import reset_tool_counter
 from src.utils.image_utils import encode_numpy_to_base64
+from src.hybrid_monitoring_agent import build_hybrid_agent
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ class AgentInterface:
     
     def __init__(
         self, 
-        agent,
+        agent: Optional[Any] = None,
         conversation_memory: Optional[ConversationMemory] = None,
         enable_memory: bool = True
     ):
@@ -151,11 +151,11 @@ class AgentInterface:
         初始化 Agent 接口
         
         Args:
-            agent: Agent 实例（HybridMonitoringAgent）
+            agent: Agent 实例（可选，不传则使用 build_hybrid_agent）
             conversation_memory: 对话记忆实例（可选，如果不提供会创建新的）
             enable_memory: 是否启用对话记忆功能
         """
-        self.agent = agent
+        self.agent = agent or build_hybrid_agent()
         self.conversation_memory = conversation_memory or ConversationMemory()
         self.enable_memory = enable_memory
         
@@ -293,9 +293,6 @@ class AgentInterface:
             AgentResponse: Agent 回答
         """
         try:
-            # 重置 Tool 调用计数器（每次新查询从 #1 开始）
-            reset_tool_counter()
-            
             logger.info(f"Agent 处理用户查询: {query}")
             
             # 添加用户消息到对话记忆

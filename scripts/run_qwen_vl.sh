@@ -28,7 +28,7 @@ python3 -m vllm.entrypoints.openai.api_server \
     --host 0.0.0.0 \
     --port $PORT \
     --tensor-parallel-size 1 \
-    --max-model-len 2048 \
+    --max-model-len 4096 \
     --dtype=float16 \
     --gpu-memory-utilization 0.85 \
     --enable-auto-tool-choice \

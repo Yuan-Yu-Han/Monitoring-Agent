@@ -119,6 +119,7 @@ class GlobalConfig:
             self.debug = True
             self.log_level = "DEBUG"
 
+
     def validate(self) -> Dict[str, Any]:
         result = {"valid": True, "errors": [], "warnings": []}
 
@@ -196,7 +197,6 @@ class GlobalConfig:
         agent_data = get_section(data, "agent", {})
         system_data = get_section(data, "system", {})
         rag_data = get_section(data, "rag", {})
-
         return cls(
             openai=OpenAIConfig(**openai_data),
             vllm_chat=VLLMChatConfig(**vllm_data),
@@ -288,6 +288,7 @@ def print_config(config: GlobalConfig):
     print(f"  Log Level: {config.log_level}")
     print(f"  Cache Enabled: {config.cache_enabled}")
     print(f"  Cache Directory: {config.cache_dir}")
+
 
 
 

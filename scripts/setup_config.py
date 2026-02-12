@@ -120,7 +120,6 @@ def create_config_file():
     print(f"   默认策略: {config.detection.default_strategy}")
     print(f"   Agent 名称: {config.agent.name}")
     print(f"   详细模式: {config.agent.verbose}")
-
     return config_file
 
 
@@ -136,16 +135,17 @@ OPENAI_MODEL=gpt-3.5-turbo
 
 # vLLM Chat 配置
 VLLM_BASE_URL=http://127.0.0.1:8000/v1
-VLLM_MODEL_NAME=Qwen2.5-VL-7B-Instruct
+VLLM_MODEL_NAME=Qwen3-VL-8B-Instruct
 VLLM_API_KEY=
 
 # vLLM Embedding 配置
 VLLM_EMBED_BASE_URL=http://127.0.0.1:8001/v1
-VLLM_EMBED_MODEL_NAME=Qwen3-VL-Embedding-2B
+VLLM_EMBED_MODEL_NAME=text-embedding-3-small
 VLLM_EMBED_API_KEY=
 
 # 系统配置
 HYBRID_AGENT_DEBUG=false
+
 """
 
     env_file = Path(__file__).parent.parent / ".env"

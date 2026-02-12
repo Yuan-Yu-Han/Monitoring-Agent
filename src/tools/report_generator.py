@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import Optional, Dict, List, Any
 from pathlib import Path
 from langchain.tools import tool
-from src.tools.tool_interceptor import log_tool_call, log_tool_step, log_tool_result, log_tool_error
 
 
 # Output directory configuration
@@ -28,7 +27,7 @@ def generate_report(
 ) -> str:
     """
     Generate a monitoring report based on detections and analysis.
-    
+
     Args:
         detections: JSON string with detection results or formatted detection text
         analysis: AI analysis and insights from the monitoring system
@@ -36,25 +35,17 @@ def generate_report(
         format: Report format - 'markdown', 'json', or 'html'
         save_file: Whether to save the report to a file
         region: Monitored region/location name
-    
+
     Returns:
         str: Either full report (if format='json'/'html') or summary with file path info
     """
-    log_tool_call("generate_report", severity=severity, format=format, region=region, save_file=save_file)
-    
     try:
-        log_tool_step("生成时间戳...")
-        # Generate timestamp
         timestamp = datetime.now()
         timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
         timestamp_file = timestamp.strftime("%Y%m%d_%H%M%S")
-        
-        log_tool_step("解析检测结果...")
-        # Parse detections if it's a JSON string
+
         detections_parsed = _parse_detections(detections)
-        
-        log_tool_step(f"生成 {format.upper()} 格式报告...")
-        # Create report content based on format
+
         if format.lower() == "markdown":
             report_content = _generate_markdown_report(
                 detections_parsed, analysis, severity, region, timestamp_str
@@ -68,30 +59,18 @@ def generate_report(
                 detections_parsed, analysis, severity, region, timestamp_str
             )
         else:
-            log_tool_error(f"不支持的格式: {format}")
             return f"❌ Unsupported format: {format}. Use 'markdown', 'json', or 'html'."
-        
-        log_tool_step(f"报告内容生成完成 ({len(report_content)} 字符)")
-        
-        # Save to file if requested
+
         file_path = None
         if save_file:
-            log_tool_step("保存报告到文件...")
             file_path = _save_report(report_content, format, region, timestamp_file)
-            if file_path:
-                log_tool_step(f"✅ 报告已保存: {file_path}")
-        
-        log_tool_step("生成对话摘要...")
-        # Return summary for dialogue display
+
         summary = _generate_summary(
             detections_parsed, analysis, severity, format, file_path
         )
-        
-        log_tool_result(summary)
         return summary
-    
+
     except Exception as e:
-        log_tool_error(str(e))
         raise
 
 
@@ -122,7 +101,7 @@ def _generate_markdown_report(
         "warning": "⚠️",
         "critical": "🚨",
     }.get(severity.lower(), "📋")
-    
+
     report = f"""# 监控分析报告
 
 **生成时间：** {timestamp}  

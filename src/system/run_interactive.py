@@ -17,8 +17,6 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.frame.monitoring_system import MonitoringSystem, MonitoringSystemConfig
-from src.hybrid_monitoring_agent import HybridMonitoringAgent
-from config import GlobalConfig
 
 # 创建 agent 日志目录
 LOG_DIR = Path("./logs/agent")

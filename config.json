@@ -46,8 +46,8 @@
     ]
   },
   "rag": {
-    "chunk_max_chars": 800,
-    "chunk_overlap": 120,
+    "chunk_max_chars": 400,
+    "chunk_overlap": 80,
     "dense_k": 3,
     "sparse_k": 5,
     "rrf_k": 60,

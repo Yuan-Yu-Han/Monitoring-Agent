@@ -10,9 +10,7 @@ CLI 应用 - 监控系统交互终端
 import logging
 from datetime import datetime
 from pathlib import Path
-from config import GlobalConfig
-from src.hybrid_monitoring_agent import HybridMonitoringAgent
-from src.agent_interface import AgentInterface, MessageRole
+from src.agent_interface import AgentInterface
 
 # 创建 agent 日志目录
 LOG_DIR = Path("./logs/agent")
@@ -163,11 +161,7 @@ def main():
     try:
         # 初始化 Agent
         print("初始化 Agent...")
-        config = GlobalConfig()
-        hybrid_agent = HybridMonitoringAgent(config)
-        
-        # 创建接口
-        interface = AgentInterface(hybrid_agent)
+        interface = AgentInterface()
         
         # 启动交互式对话
         chat = InteractiveChat(interface)
