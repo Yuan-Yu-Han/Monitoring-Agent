@@ -9,3 +9,4 @@ rag_data/
 *.pkl
 *.log
 *.sqlite3
+.MD
