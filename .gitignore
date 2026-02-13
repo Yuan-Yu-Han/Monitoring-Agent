@@ -1,0 +1,7 @@
+logs/
+outputs/
+.vscode/
+__pycache__/
+docs/
+data/
+rag_data/

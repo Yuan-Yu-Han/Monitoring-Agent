@@ -1,8 +1,0 @@
-2026-02-12 19:00:49,099 - src.agent_interface - INFO - Agent 处理用户查询: 帮我检测fire1 文件夹fire1图片
-2026-02-12 19:00:50,448 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
-2026-02-12 19:00:54,515 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
-2026-02-12 19:00:57,947 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
-2026-02-12 19:01:05,031 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
-2026-02-12 19:01:09,722 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
-2026-02-12 19:01:16,045 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
-2026-02-12 19:01:20,297 - httpx - INFO - HTTP Request: POST http://127.0.0.1:8000/v1/chat/completions "HTTP/1.1 200 OK"
