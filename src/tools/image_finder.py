@@ -7,7 +7,10 @@ import os
 from pathlib import Path
 from typing import Optional, List, Dict
 from difflib import SequenceMatcher
+
 from langchain.tools import tool
+from src.utils.frame_registry import frame_registry
+import cv2
 
 
 # Common image directories
@@ -23,35 +26,43 @@ SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif", ".tiff"}
 
 
 @tool
-def find_image(query: str, search_dirs: Optional[List[str]] = None) -> str:
+def find_image(query: str = None, event_id: str = None, search_dirs: Optional[List[str]] = None) -> str:
     """
-    Find image file by query string with fuzzy matching.
-    Searches in common directories and returns the best match.
-    
+    查找图片，支持 event_id 查询（推荐），也支持 query 模糊查找。
     Args:
-        query: Image name, partial path, or description (e.g., "camera1", "monitor.jpg", "parking_lot")
-        search_dirs: Optional list of additional directories to search
-    
+        event_id: 事件帧唯一ID（推荐）
+        query: 图片名、描述或路径
+        search_dirs: 可选自定义目录列表
     Returns:
-        str: Complete absolute path to the image, or error message with suggestions
+        str: 查找结果或分析结果
     """
     try:
+        if event_id:
+            path = frame_registry.get(event_id)
+            if path and os.path.exists(path):
+                try:
+                    img = cv2.imread(path)
+                    if img is not None:
+                        return f"✅ 通过 event_id 找到帧\n路径: {path}\nshape: {img.shape}"
+                    else:
+                        return f"❌ event_id={event_id} 路径存在但图片无法读取: {path}"
+                except Exception as e:
+                    return f"❌ event_id={event_id} 读取图片异常: {e}"
+            else:
+                return f"❌ event_id={event_id} 未找到对应帧或文件已过期"
+
+        # 兼容原有 query 查找
         result_lines = []
         result_lines.append(f"🔍 **开始查找图片**")
         result_lines.append(f"📝 查询: '{query}'")
-        
-        # Prepare search directories
         dirs_to_search = IMAGE_DIRS.copy()
         if search_dirs:
             dirs_to_search.extend([Path(d) for d in search_dirs])
-        
         result_lines.append(f"📂 搜索目录 ({len(dirs_to_search)}个):")
         for d in dirs_to_search:
             result_lines.append(f"   - {d}")
-        
-        # Try direct path first
         result_lines.append(f"\n✨ 步骤1: 尝试直接路径...")
-        if os.path.exists(query) and os.path.isfile(query):
+        if query and os.path.exists(query) and os.path.isfile(query):
             abs_path = os.path.abspath(query)
             result_lines.append(f"✅ 直接匹配成功!")
             result_lines.append(f"📍 路径: {abs_path}")

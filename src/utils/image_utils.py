@@ -3,6 +3,14 @@ import os
 import cv2
 import numpy as np
 
+def decode_base64_to_numpy(base64_str: str) -> np.ndarray:
+    """将 base64 编码的图片解码为 numpy 数组（BGR）"""
+    img_bytes = base64.b64decode(base64_str)
+    img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    return img
+
+
 
 def is_url(path: str) -> bool:
     """

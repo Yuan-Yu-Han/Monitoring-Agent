@@ -80,6 +80,30 @@ class RAGConfig:
 
 
 @dataclass
+class MonitoringConfig:
+    rtsp_url: str = "rtsp://127.0.0.1:8554/mystream"
+    rtsp_fps: int = 5
+    rtsp_connect_timeout: int = 10
+
+    yolo_model: str = "yolov8n.pt"
+    yolo_confidence: float = 0.5
+    yolo_device: str = "cuda:0"
+
+    suspect_threshold: int = 2
+    alarm_threshold: int = 5
+    idle_threshold: int = 10
+    target_classes: List[str] = field(default_factory=lambda: ["fire", "smoke", "person"])
+
+    save_event_frames: bool = True
+    save_detection_frames: bool = False
+    output_dir: str = "./outputs/alarm"
+    detection_save_interval: int = 30
+
+    enable_signal_handling: bool = True
+    log_interval: int = 30
+
+
+@dataclass
 class GlobalConfig:
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     vllm_chat: VLLMChatConfig = field(default_factory=VLLMChatConfig)
@@ -88,6 +112,7 @@ class GlobalConfig:
     io: IOConfig = field(default_factory=IOConfig)  # 添加 IOConfig
     agent: AgentConfig = field(default_factory=AgentConfig)
     rag: RAGConfig = field(default_factory=RAGConfig)
+    monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     
     debug: bool = False
     log_level: str = "INFO"
@@ -167,6 +192,7 @@ class GlobalConfig:
             "io": asdict(self.io),  # 添加 IOConfig 到字典
             "agent": asdict(self.agent),
             "rag": asdict(self.rag),
+            "monitoring": asdict(self.monitoring),
             "system": {
                 "debug": self.debug,
                 "log_level": self.log_level,
@@ -197,6 +223,7 @@ class GlobalConfig:
         agent_data = get_section(data, "agent", {})
         system_data = get_section(data, "system", {})
         rag_data = get_section(data, "rag", {})
+        monitoring_data = get_section(data, "monitoring", {})
         return cls(
             openai=OpenAIConfig(**openai_data),
             vllm_chat=VLLMChatConfig(**vllm_data),
@@ -214,6 +241,7 @@ class GlobalConfig:
                     "rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"
                 ),
             ),
+            monitoring=MonitoringConfig(**monitoring_data),
             debug=system_data.get("debug", False),
             log_level=system_data.get("log_level", "INFO"),
             cache_enabled=system_data.get("cache_enabled", True),

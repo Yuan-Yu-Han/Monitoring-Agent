@@ -27,6 +27,28 @@
     "auto_fallback": true,
     "max_concurrent": 5
   },
+  "monitoring": {
+    "rtsp_url": "rtsp://127.0.0.1:8554/mystream",
+    "rtsp_fps": 5,
+    "rtsp_connect_timeout": 10,
+    "yolo_model": "yolov8n.pt",
+    "yolo_confidence": 0.5,
+    "yolo_device": "cuda:0",
+    "suspect_threshold": 2,
+    "alarm_threshold": 5,
+    "idle_threshold": 10,
+    "target_classes": [
+      "fire",
+      "smoke",
+      "person"
+    ],
+    "save_event_frames": true,
+    "save_detection_frames": false,
+    "output_dir": "./outputs/alarm",
+    "detection_save_interval": 30,
+    "enable_signal_handling": true,
+    "log_interval": 30
+  },
   "io": {
     "input_dir": "./inputs",
     "output_dir": "./outputs"

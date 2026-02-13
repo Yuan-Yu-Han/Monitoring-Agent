@@ -57,7 +57,7 @@ START_RTSP=false
 
 if [ "$#" -eq 0 ]; then
     START_VL=true
-    START_EMBED=true
+    START_EMBED=false
     START_RTSP=true
 else
     for arg in "$@"; do

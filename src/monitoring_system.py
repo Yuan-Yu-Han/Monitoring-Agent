@@ -23,6 +23,7 @@ import signal
 import sys
 import threading
 
+from config import MonitoringConfig
 from src.system.event_trigger import EventTrigger, EventTriggerConfig, DetectionEvent, MonitorState
 
 # 创建 agent 日志目录
@@ -56,38 +57,6 @@ class MonitoringState(Enum):
     PAUSED = "paused"          # 暂停
     STOPPED = "stopped"        # 已停止
 
-
-@dataclass
-class MonitoringSystemConfig:
-    """监控系统配置
-    
-    管理所有子模块的配置
-    """
-    # RTSP 配置
-    rtsp_url: str
-    rtsp_fps: int = 5
-    rtsp_connect_timeout: int = 10
-    
-    # YOLO 配置
-    yolo_model: str = "yolov8n.pt"
-    yolo_confidence: float = 0.5
-    yolo_device: str = "cuda:0"
-    
-    # 事件触发配置
-    suspect_threshold: int = 2
-    alarm_threshold: int = 5
-    idle_threshold: int = 10
-    target_classes: List[str] = field(default_factory=lambda: ["fire", "smoke", "person"])
-    
-    # 持久化配置
-    save_event_frames: bool = True
-    save_detection_frames: bool = False
-    output_dir: str = "./outputs/alarm"
-    detection_save_interval: int = 30
-    
-    # 运行配置
-    enable_signal_handling: bool = True
-    log_interval: int = 30  # 每 30 帧打印一次日志
 
 
 @dataclass
@@ -156,7 +125,7 @@ class MonitoringSystem:
     - 具体的应用业务逻辑
     """
     
-    def __init__(self, config: MonitoringSystemConfig, agent_interface):
+    def __init__(self, config: MonitoringConfig, agent_interface):
         """
         初始化监控系统
         
@@ -188,35 +157,27 @@ class MonitoringSystem:
     
     def _init_components(self):
         """初始化各个子模块"""
-        try:
-            # 延迟导入，避免硬依赖
-            from src.monitoring_system.rtsp_extractor import RTSPFrameExtractor, FrameExtractorConfig
-            from src.monitoring_system.yolo_detector import YOLODetector, YOLOConfig
-            
-            # 1. RTSP 抽帧器
-            self.frame_extractor = RTSPFrameExtractor(
-                FrameExtractorConfig(
-                    rtsp_url=self.config.rtsp_url,
-                    fps=self.config.rtsp_fps,
-                    connect_timeout=self.config.rtsp_connect_timeout
-                )
+        # 1. RTSP 抽帧器
+        from src.system.rtsp_extractor import RTSPFrameExtractor, FrameExtractorConfig
+        self.frame_extractor = RTSPFrameExtractor(
+            FrameExtractorConfig(
+                rtsp_url=self.config.rtsp_url,
+                fps=self.config.rtsp_fps
             )
-            logger.info("✓ RTSP 抽帧器初始化完成")
-            
-            # 2. YOLO 检测器
-            self.detector = YOLODetector(
-                YOLOConfig(
-                    model_path=self.config.yolo_model,
-                    confidence=self.config.yolo_confidence,
-                    device=self.config.yolo_device
-                )
+        )
+        logger.info("✓ RTSP 抽帧器初始化完成")
+
+        # 2. YOLO 检测器
+        from src.system.yolo_detector import YOLODetector, YOLOConfig
+        self.detector = YOLODetector(
+            YOLOConfig(
+                model_path=self.config.yolo_model,
+                confidence=self.config.yolo_confidence,
+                device=self.config.yolo_device
             )
-            logger.info("✓ YOLO 检测器初始化完成")
-            
-        except ImportError as e:
-            logger.warning(f"⚠️  无法导入组件: {e}，使用模拟组件")
-            self._init_mock_components()
-        
+        )
+        logger.info("✓ YOLO 检测器初始化完成")
+
         # 3. 事件触发器（必需）
         self.event_trigger = EventTrigger(
             EventTriggerConfig(
@@ -228,25 +189,7 @@ class MonitoringSystem:
         )
         logger.info("✓ 事件触发器初始化完成")
     
-    def _init_mock_components(self):
-        """初始化模拟组件（用于测试）"""
-        logger.warning("使用模拟的 RTSP 和 YOLO 组件")
-        
-        class MockExtractor:
-            def stream(self):
-                import numpy as np
-                while True:
-                    yield np.zeros((480, 640, 3), dtype=np.uint8)
-            
-            def disconnect(self):
-                pass
-        
-        class MockDetector:
-            def detect(self, frame):
-                return []
-        
-        self.frame_extractor = MockExtractor()
-        self.detector = MockDetector()
+    # 已移除模拟组件逻辑，组件导入失败将直接抛出异常
     
     # ========================================================================
     # 生命周期控制
@@ -367,31 +310,34 @@ class MonitoringSystem:
                 self._handle_error(f"处理帧异常: {e}")
     
     def _process_event(self, event: DetectionEvent):
-        """处理事件，调用 Agent"""
+        """处理事件，支持可选保存帧，内存分析，调用 Agent"""
         self.stats.event_count += 1
         logger.info(f"⚡ 事件 #{self.stats.event_count}: {event.state.value}")
-        
+
         try:
-            # 调用 Agent（接口层）
-            response = self.agent_interface.handle_event(event)
-            
+            # 控制分支：是否保存事件帧
+            save_frame = getattr(self.config, 'save_event_frames', True)
+            if save_frame and event.frame is not None:
+                self._save_event_frame(event)
+
+            # 直接调用 Agent（接口层），仅传 event_id
+            event_id = getattr(event, 'event_id', None)
+            tool_args = {"event_id": event_id} if event_id else None
+            response = self.agent_interface.handle_event(event, tool_args=tool_args)
+
             # 更新统计
             if response.severity == "critical":
                 self.stats.alarm_count += 1
             elif response.severity == "warning":
                 self.stats.warning_count += 1
-            
+
             # 调用用户回调
             if self.on_event:
                 try:
                     self.on_event(event, response)
                 except Exception as e:
                     logger.error(f"事件回调异常: {e}")
-            
-            # 保存事件帧
-            if self.config.save_event_frames and event.frame is not None:
-                self._save_event_frame(event)
-        
+
         except Exception as e:
             logger.error(f"处理事件异常: {e}", exc_info=True)
             self.stats.error_count += 1
@@ -537,15 +483,19 @@ class MonitoringSystem:
         
         try:
             os.makedirs(self.config.output_dir, exist_ok=True)
-            
-            filename = (
-                f"{event.timestamp.strftime('%Y%m%d_%H%M%S')}_"
-                f"{event.state.value}_frame{self.stats.frame_count}.jpg"
-            )
+            from uuid import uuid4
+            from src.utils.frame_registry import frame_registry
+            # 生成唯一 event_id
+            event_id = getattr(event, 'event_id', None)
+            if not event_id:
+                event_id = f"{event.timestamp.strftime('%Y%m%d_%H%M%S')}_{event.state.value}_{str(uuid4())[:6]}"
+                setattr(event, 'event_id', event_id)
+            filename = f"{event_id}.jpg"
             filepath = os.path.join(self.config.output_dir, filename)
-            
             cv2.imwrite(filepath, event.frame)
-            logger.info(f"💾 事件帧已保存: {filepath}")
+            # 注册到 FrameRegistry
+            frame_registry.register(event_id, filepath)
+            logger.info(f"💾 事件帧已保存: {filepath} (event_id={event_id})")
         except Exception as e:
             logger.error(f"保存事件帧失败: {e}")
     
@@ -623,89 +573,3 @@ class MonitoringSystem:
             f"  运行时间: {self.stats.get_uptime_seconds():.1f}s"
         )
 
-
-# 主程序入口示例
-if __name__ == "__main__":
-    # 配置日志
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # 配置系统
-    config = MonitoringSystemConfig(
-        rtsp_url="rtsp://127.0.0.1:8554/mystream",
-        rtsp_fps=1,
-        yolo_model="yolov8n.pt",
-        yolo_device="cuda:0",  # 如果没有 GPU 使用 "cpu"
-        suspect_threshold=2,
-        alarm_threshold=5,
-        target_classes=["fire", "smoke", "person"],
-        save_event_frames=True,
-        output_dir="./outputs/alarm"
-    )
-    
-    # 创建 Agent（这里需要替换为实际的 Agent）
-    # from src.hybrid_monitoring_agent import HybridMonitoringAgent
-    # from src.system.agent_interface import AgentInterface
-    # from config import GlobalConfig
-    # agent = HybridMonitoringAgent(GlobalConfig())
-    # agent_interface = AgentInterface(agent, enable_memory=True)
-    
-    # 临时使用模拟 Agent
-    class MockAgent:
-        def invoke(self, messages):
-            return {
-                "messages": [{
-                    "content": "检测到异常情况，建议关注。"
-                }]
-            }
-    
-    class MockAgentInterface:
-        def handle_event(self, event):
-            from src.monitoring_system.agent_interface import AgentResponse
-            return AgentResponse(
-                success=True,
-                message="检测到异常情况，建议关注。",
-                severity="warning"
-            )
-        
-        def handle_user_query(self, query, context=None):
-            from src.monitoring_system.agent_interface import AgentResponse
-            return AgentResponse(
-                success=True,
-                message="已收到你的问题。",
-                severity="info"
-            )
-    
-    agent_interface = MockAgentInterface()
-    
-    # 创建监控系统
-    system = MonitoringSystem(config, agent_interface)
-    
-    # 设置事件回调（可选）
-    def on_event(event, response):
-        print(f"\n🔔 事件通知: {event.state.value}")
-        print(f"Agent: {response.message[:100]}")
-    
-    system.set_event_callback(on_event)
-    
-    # 启动监控
-    try:
-        system.run()
-    except KeyboardInterrupt:
-        logger.info("用户中断")
-    
-    def _signal_handler(self, sig, frame):
-        """信号处理器（Ctrl+C）"""
-        logger.info("\n收到停止信号，正在关闭...")
-        self.stop()
-    
-    def _cleanup(self):
-        """清理资源"""
-        logger.info("清理资源...")
-        self.frame_extractor.disconnect()
-        logger.info(
-            f"监控已停止。总计处理 {self.frame_count} 帧，"
-            f"触发 {self.event_count} 次事件"
-        )

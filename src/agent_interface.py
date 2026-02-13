@@ -139,26 +139,26 @@ class AgentInterface:
                 severity="error"
             )
     
-    def handle_event(self, event: DetectionEvent) -> AgentResponse:
-        """事件驱动入口，用于监控事件触发处理。"""
+    def handle_event(self, event: DetectionEvent, tool_args: Optional[Dict[str, Any]] = None) -> AgentResponse:
+        """事件驱动入口，用于监控事件触发处理。支持 tool_args 传递给 Agent 工具。"""
         try:
             logger.info(f"Agent 处理事件: {event.state.value}")
-            
             # 保存事件到历史
             self.last_events.append(event)
             if len(self.last_events) > self.max_event_history:
                 self.last_events = self.last_events[-self.max_event_history:]
-            
             # 构建提示词（融合事件上下文 + 对话历史）
             prompt = self._build_event_prompt(event)
-            
+            # 合并 tool_args 到 config['configurable']
+            config = {"configurable": {"thread_id": "event_1"}}
+            if tool_args:
+                config["configurable"].update(tool_args)
             # 调用 Agent
             response = self._invoke_agent(
                 prompt,
-                config={"configurable": {"thread_id": "event_1"}},
+                config=config,
                 stream=True
             )
-            
             # 添加到对话记忆
             if self.enable_memory:
                 self.conversation_memory.add_message(
@@ -170,17 +170,13 @@ class AgentInterface:
                     MessageRole.ASSISTANT,
                     response
                 )
-            
             # 解析 Agent 响应并评估严重性
             agent_response = self._parse_agent_response(response, event)
-            
             logger.info(
                 f"Agent 响应: severity={agent_response.severity}, "
                 f"escalate={agent_response.should_escalate}"
             )
-            
             return agent_response
-            
         except Exception as e:
             logger.error(f"Agent 处理事件失败: {e}", exc_info=True)
             return AgentResponse(
