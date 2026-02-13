@@ -5,3 +5,7 @@ __pycache__/
 docs/
 data/
 rag_data/
+*.pyc
+*.pkl
+*.log
+*.sqlite3
