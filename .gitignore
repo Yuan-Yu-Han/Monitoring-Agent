@@ -10,3 +10,19 @@ rag_data/
 *.log
 *.sqlite3
 .MD
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+
+# Images / event frames
+*.jpg
+*.png
+
+# VSCode
+.vscode/
+
+# Mac
+.DS_Store
