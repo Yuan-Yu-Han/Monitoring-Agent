@@ -93,6 +93,45 @@ class InteractiveChat:
                     "current_state": "MONITORING"
                 }
             )
+
+            if self.interface.last_interrupt:
+                interrupt = self.interface.last_interrupt
+                interrupt_value = getattr(interrupt, "value", None)
+                action = None
+                if isinstance(interrupt_value, dict):
+                    requests = interrupt_value.get("action_requests", [])
+                    if requests:
+                        action = requests[0]
+
+                if action:
+                    tool_name = action.get("name", "unknown")
+                    tool_args = action.get("args", {})
+                    print(f"\n⚠️ 需要人工确认: {tool_name}", flush=True)
+                    print(f"参数: {tool_args}", flush=True)
+                else:
+                    print("\n⚠️ 需要人工确认", flush=True)
+
+                print("请输入决策 (approve/reject/edit):", flush=True)
+
+                aliases = {
+                    "accept": "approve",
+                    "approval": "approve",
+                    "yes": "approve",
+                    "no": "reject",
+                }
+                while True:
+                    decision = input().strip().lower()
+                    decision = aliases.get(decision, decision)
+                    if decision in ["approve", "reject", "edit"]:
+                        break
+                    print("无效输入，请输入 approve / reject / edit", flush=True)
+                response_text = self.interface.resume_with_decision(decision_type=decision)
+                if response_text:
+                    response.message = response_text
+                else:
+                    response.message = "已处理审批，暂无新的输出。"
+
+            
             
             # 显示响应
             print("\n" + "-" * 70)

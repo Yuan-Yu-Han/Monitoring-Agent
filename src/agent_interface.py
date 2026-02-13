@@ -1,14 +1,4 @@
-"""
-Agent 调用接口 - 接口层
-提供两种调用模式：事件驱动 和 用户驱动
-
-职责：
-✓ 统一入口：process(input, context)
-✓ 维护对话记忆 (ConversationMemory)
-✓ 构建 prompt（融合事件上下文 + 对话历史）
-✓ 解析 Agent 响应
-✓ 评估事件严重程度和是否升级
-"""
+"""Agent 调用接口，提供事件驱动和用户驱动两种模式。"""
 
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
@@ -17,6 +7,7 @@ import logging
 import numpy as np
 from enum import Enum
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
 from src.system.event_trigger import DetectionEvent, MonitorState
 from src.utils.image_utils import encode_numpy_to_base64
@@ -26,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class MessageRole(Enum):
-    """消息角色"""
+    """消息角色定义，统一对话角色标签。"""
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
@@ -34,14 +25,14 @@ class MessageRole(Enum):
 
 @dataclass
 class ConversationMessage:
-    """对话消息"""
+    """对话消息，包含角色、内容与元信息。"""
     role: MessageRole
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
+        """转换为字典，便于序列化与日志记录。"""
         return {
             "role": self.role.value,
             "content": self.content,
@@ -52,23 +43,12 @@ class ConversationMessage:
 
 @dataclass
 class ConversationMemory:
-    """对话记忆管理
-    
-    职责：
-    - 存储和管理对话历史
-    - 维护消息队列，避免超出 token 限制
-    - 提供上下文检索
-    """
+    """对话记忆管理，用于存取历史消息。"""
     messages: List[ConversationMessage] = field(default_factory=list)
     max_history: int = 10  # 最多保留 10 条消息（从 20 改为 10）
     
-    def add_message(
-        self, 
-        role: MessageRole, 
-        content: str, 
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """添加消息到记忆"""
+    def add_message(self, role: MessageRole, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """添加消息到记忆，并维护最大历史长度。"""
         message = ConversationMessage(
             role=role,
             content=content,
@@ -81,11 +61,11 @@ class ConversationMemory:
             self.messages = self.messages[-self.max_history:]
     
     def get_recent_messages(self, n: int = 5) -> List[ConversationMessage]:
-        """获取最近的 N 条消息"""
+        """获取最近的 N 条消息，默认取最后 5 条。"""
         return self.messages[-n:] if n > 0 else self.messages
     
     def get_conversation_context(self) -> str:
-        """获取对话上下文作为字符串"""
+        """获取对话上下文字符串，用于提示词拼接。"""
         if not self.messages:
             return ""
         
@@ -97,15 +77,11 @@ class ConversationMemory:
         return "\n".join(context_parts)
     
     def clear(self) -> None:
-        """清空记忆"""
+        """清空对话记忆。"""
         self.messages.clear()
     
     def get_messages_for_context(self) -> List[Dict[str, str]]:
-        """获取消息列表用于 LLM 上下文
-        
-        Returns:
-            符合 LLM API 格式的消息列表
-        """
+        """获取消息列表用于 LLM 上下文，返回 role/content 格式。"""
         return [
             {"role": msg.role.value, "content": msg.content}
             for msg in self.messages[-5:]  # 从 10 改为 5
@@ -114,10 +90,7 @@ class ConversationMemory:
 
 @dataclass
 class AgentResponse:
-    """Agent 响应
-    
-    包含 Agent 的分析结果、严重程度评估和是否需要升级报警
-    """
+    """Agent 响应对象，包含文本与严重性信息。"""
     success: bool
     message: str                    # Agent 生成的文本回复
     severity: str = "info"          # 严重程度: info, warning, critical
@@ -126,68 +99,22 @@ class AgentResponse:
 
 
 class AgentInterface:
-    """
-    Agent 调用接口 - 接口层
+    """Agent 调用接口，包含事件驱动与用户驱动两种模式。"""
     
-    职责：
-    1. 统一入口：process(input, context) - 处理所有输入
-    2. 维护对话记忆 (ConversationMemory) - 保存对话历史
-    3. 构建 prompt - 融合事件上下文 + 对话历史
-    4. 解析 Agent 响应 - 提取关键信息
-    5. 评估事件严重程度和是否升级 - 智能决策
-    
-    提供两种调用模式：
-    1. 事件驱动（handle_event）：基于检测事件调用
-    2. 用户驱动（handle_user_query）：基于用户问题调用
-    """
-    
-    def __init__(
-        self, 
-        agent: Optional[Any] = None,
-        conversation_memory: Optional[ConversationMemory] = None,
-        enable_memory: bool = True
-    ):
-        """
-        初始化 Agent 接口
-        
-        Args:
-            agent: Agent 实例（可选，不传则使用 build_hybrid_agent）
-            conversation_memory: 对话记忆实例（可选，如果不提供会创建新的）
-            enable_memory: 是否启用对话记忆功能
-        """
+    def __init__(self, agent: Optional[Any] = None, conversation_memory: Optional[ConversationMemory] = None, enable_memory: bool = True):
+        """初始化 Agent 接口，允许传入自定义 agent。"""
         self.agent = agent or build_hybrid_agent()
         self.conversation_memory = conversation_memory or ConversationMemory()
         self.enable_memory = enable_memory
+        self.last_interrupt = None
+        self.last_config = None
         
         # 事件上下文缓存（用于丰富提示词）
         self.last_events: List[DetectionEvent] = []
         self.max_event_history = 5
     
-    def process(
-        self, 
-        input_data: Dict[str, Any], 
-        context: Optional[Dict[str, Any]] = None
-    ) -> AgentResponse:
-        """
-        统一入口：处理输入数据
-        
-        支持两种输入类型：
-        1. event：基于检测事件的驱动
-        2. query：基于用户查询的驱动
-        
-        Args:
-            input_data: 输入数据字典，格式如下：
-                {
-                    "type": "event" | "query",
-                    "event": DetectionEvent (如果 type 是 event),
-                    "query": str (如果 type 是 query),
-                    "image": np.ndarray (可选，用于图像分析)
-                }
-            context: 额外上下文信息（可选）
-            
-        Returns:
-            AgentResponse: Agent 响应
-        """
+    def process(self, input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
+        """统一入口：处理输入数据并分发到对应路径。"""
         input_type = input_data.get("type", "query")
         
         if input_type == "event":
@@ -213,18 +140,7 @@ class AgentInterface:
             )
     
     def handle_event(self, event: DetectionEvent) -> AgentResponse:
-        """
-        路径 1：事件驱动
-        
-        当状态机触发事件时调用。会使用最近的事件历史和对话记忆
-        来构建更富有上下文的提示词。
-        
-        Args:
-            event: 检测事件
-            
-        Returns:
-            AgentResponse: Agent 分析结果
-        """
+        """事件驱动入口，用于监控事件触发处理。"""
         try:
             logger.info(f"Agent 处理事件: {event.state.value}")
             
@@ -235,9 +151,6 @@ class AgentInterface:
             
             # 构建提示词（融合事件上下文 + 对话历史）
             prompt = self._build_event_prompt(event)
-            
-            # 准备图像（如果需要视觉分析）
-            image_data = self._encode_image(event.frame) if event.frame is not None else None
             
             # 调用 Agent
             response = self._invoke_agent(
@@ -276,26 +189,8 @@ class AgentInterface:
                 severity="error"
             )
     
-    def handle_user_query(
-        self, 
-        query: str, 
-        context: Optional[Dict[str, Any]] = None,
-        image: Optional[np.ndarray] = None
-    ) -> AgentResponse:
-        """
-        路径 2：用户驱动
-        
-        用户提问时调用。会融合对话记忆、事件上下文和额外信息
-        来构建更完整的提示词。
-        
-        Args:
-            query: 用户问题
-            context: 上下文信息（如最近的事件历史）
-            image: 可选的图像（用户可能要求分析当前画面）
-            
-        Returns:
-            AgentResponse: Agent 回答
-        """
+    def handle_user_query(self, query: str, context: Optional[Dict[str, Any]] = None, image: Optional[np.ndarray] = None) -> AgentResponse:
+        """用户驱动入口，用于处理用户查询。"""
         try:
             logger.info(f"Agent 处理用户查询: {query}")
             
@@ -309,9 +204,6 @@ class AgentInterface:
             
             # 构建提示词（融合对话历史 + 事件上下文 + 用户查询）
             prompt = self._build_user_prompt(query, context)
-            
-            # 准备图像
-            image_data = self._encode_image(image) if image is not None else None
             
             # 调用 Agent
             response = self._invoke_agent(
@@ -345,20 +237,7 @@ class AgentInterface:
             )
     
     def _build_event_prompt(self, event: DetectionEvent) -> str:
-        """
-        构建事件分析提示词
-        
-        融合以下内容：
-        - 对话历史（如果启用了内存）
-        - 当前事件信息（状态、时间、检测目标）
-        - 最近事件历史（1 条）
-        
-        Args:
-            event: 检测事件
-            
-        Returns:
-            构建好的提示词
-        """
+        """构建事件分析提示词，融合事件与历史上下文。"""
         state_desc = {
             MonitorState.SUSPECT: "检测到可疑情况",
             MonitorState.ALARM: "检测到异常事件",
@@ -406,27 +285,8 @@ class AgentInterface:
         
         return "\n".join(prompt_parts)
     
-    def _build_user_prompt(
-        self, 
-        query: str, 
-        context: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """
-        构建用户查询提示词
-        
-        融合以下内容：
-        - 对话历史（最近 3 条）
-        - 最近的监控事件（1 条）
-        - 额外上下文信息
-        - 用户查询
-        
-        Args:
-            query: 用户问题
-            context: 额外上下文信息
-            
-        Returns:
-            构建好的提示词
-        """
+    def _build_user_prompt(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """构建用户查询提示词，融合对话与事件上下文。"""
         prompt_parts = []
         
         # 添加对话历史（只取最近 3 条）
@@ -453,35 +313,14 @@ class AgentInterface:
         
         return "\n".join(prompt_parts)
     
-    def _invoke_agent(
-        self, 
-        prompt: str,
-        config: Optional[Dict[str, Any]] = None,
-        stream: bool = False
-    ) -> str:
-        """
-        调用 Agent
-        
-        支持多种 Agent 类型：
-        - LangChain Agent（带 invoke 方法）
-        - 其他实现了 chat 或 run 方法的 Agent
-        
-        Args:
-            prompt: 提示词
-            image_data: Base64 编码的图像（可选）
-            config: LangGraph 配置（包含 thread_id 等）
-            
-        Returns:
-            Agent 的文本响应
-            
-        Raises:
-            NotImplementedError: 不支持的 Agent 类型
-        """
-        # 根据 Agent 类型调用不同的接口
+    def _invoke_agent(self, prompt: str, config: Optional[Dict[str, Any]] = None, stream: bool = False) -> str:
+        """调用 Agent，使用 invoke 接口返回文本响应。"""
+        # 根据 Agent 类型调用不同的接口。
         if hasattr(self.agent, 'invoke'):
-            # LangChain Agent 或实现了 invoke 方法的 Agent
+            # LangChain Agent 或实现了 invoke 方法的 Agent。
             try:
                 messages = [HumanMessage(content=prompt)]
+                self.last_config = config
 
                 if stream and hasattr(self.agent, "stream"):
                     result_text = None
@@ -490,31 +329,42 @@ class AgentInterface:
                         stream_mode="updates",
                         config=config
                     ):
-                        if stream_mode == "messages":
-                            token, metadata = data
-                            content = None
-                            if hasattr(token, "content_blocks"):
-                                content = token.content_blocks
-                            elif hasattr(token, "content"):
-                                content = token.content
-                            if content:
-                                print(content, end="", flush=True)
-                        elif stream_mode == "updates":
-                            for step, update in data.items():
-                                last_message = update.get("messages", [])[-1]
-                                tool_calls = getattr(last_message, "tool_calls", None)
-                                if tool_calls:
-                                    tool_names = []
-                                    for call in tool_calls:
-                                        if isinstance(call, dict):
-                                            tool_names.append(call.get("name", "unknown"))
-                                        else:
-                                            tool_names.append(getattr(call, "name", "unknown"))
-                                    print(f"\n[tools] {', '.join(tool_names)}")
-                                if hasattr(last_message, "content") and last_message.content:
-                                    result_text = last_message.content
-                                elif isinstance(last_message, dict):
-                                    result_text = last_message.get("content", result_text)
+                        if "__interrupt__" in chunk:
+                            self.last_interrupt = chunk["__interrupt__"]
+                            return ""
+
+                        for step, update in chunk.items():
+                            if not isinstance(update, dict):
+                                continue
+                            messages_list = update.get("messages") or []
+                            if not messages_list:
+                                continue
+                            last_message = messages_list[-1]
+                            content_blocks = getattr(last_message, "content_blocks", None)
+                            if isinstance(content_blocks, list):
+                                text_parts = []
+                                for block in content_blocks:
+                                    if isinstance(block, dict) and block.get("type") == "text":
+                                        text_parts.append(block.get("text", ""))
+                                text = "".join(text_parts).strip()
+                                if text:
+                                    print(text, flush=True)
+
+                            tool_calls = getattr(last_message, "tool_calls", None)
+                            if tool_calls:
+                                print(f"step: {step}", flush=True)
+                                tool_names = []
+                                for call in tool_calls:
+                                    if isinstance(call, dict):
+                                        tool_names.append(call.get("name", "unknown"))
+                                    else:
+                                        tool_names.append(getattr(call, "name", "unknown"))
+                                print(f"[tools] {', '.join(tool_names)}", flush=True)
+
+                            if hasattr(last_message, "content") and last_message.content:
+                                result_text = last_message.content
+                            elif isinstance(last_message, dict):
+                                result_text = last_message.get("content", result_text)
 
                     if result_text:
                         return result_text
@@ -544,55 +394,52 @@ class AgentInterface:
             
             return str(result)
         
-        elif hasattr(self.agent, 'chat'):
-            # chat 方法
-            return self.agent.chat(prompt)
-        
-        elif hasattr(self.agent, 'run'):
-            # run 方法
-            return self.agent.run(prompt)
-        
         else:
             raise NotImplementedError(
                 f"不支持的 Agent 类型: {type(self.agent).__name__}\n"
                 f"Agent 必须实现以下方法之一: invoke, chat, run"
             )
+
+    def resume_with_decision(self, decision_type: str = "approve") -> str:
+        if not self.last_config:
+            return ""
+
+        decision = {"type": decision_type}
+        result_text = None
+        for chunk in self.agent.stream(
+            Command(resume={"decisions": [decision]}),
+            config=self.last_config,
+            stream_mode="updates",
+        ):
+            if "__interrupt__" in chunk:
+                self.last_interrupt = chunk["__interrupt__"]
+                return ""
+
+            for step, update in chunk.items():
+                if not isinstance(update, dict):
+                    continue
+                messages_list = update.get("messages") or []
+                if not messages_list:
+                    continue
+                last_message = messages_list[-1]
+                if hasattr(last_message, "content") and last_message.content:
+                    result_text = last_message.content
+                elif isinstance(last_message, dict):
+                    result_text = last_message.get("content", result_text)
+
+        self.last_interrupt = None
+        return result_text or ""
     
     def _encode_image(self, frame: np.ndarray) -> str:
-        """将图像编码为 Base64（调用统一的工具函数）
-        
-        Args:
-            frame: OpenCV 图像（numpy array）
-            
-        Returns:
-            Base64 编码的图像字符串
-        """
+        """将图像编码为 Base64，供视觉模型使用。"""
         try:
             return encode_numpy_to_base64(frame)
         except Exception as e:
             logger.error(f"图像编码失败: {e}")
             return ""
     
-    def _parse_agent_response(
-        self, 
-        response: str, 
-        event: DetectionEvent
-    ) -> AgentResponse:
-        """
-        解析 Agent 响应，评估严重性和是否需要升级
-        
-        使用关键词匹配进行初步评估：
-        - critical: 含有危险、紧急、火灾等词汇
-        - warning: 含有警告、异常等词汇
-        - info: 其他
-        
-        Args:
-            response: Agent 的文本响应
-            event: 原始检测事件
-            
-        Returns:
-            解析后的 AgentResponse
-        """
+    def _parse_agent_response(self, response: str, event: DetectionEvent) -> AgentResponse:
+        """解析 Agent 响应并评估严重性，返回结构化结果。"""
         severity = self._parse_severity_from_response(response)
         should_escalate = severity == "critical" or (severity == "warning" and event.state == MonitorState.ALARM)
         
@@ -609,14 +456,7 @@ class AgentInterface:
         )
     
     def _parse_severity_from_response(self, response: str) -> str:
-        """从 Agent 回复中解析严重程度
-        
-        Args:
-            response: Agent 的文本响应
-            
-        Returns:
-            严重程度: "critical", "warning", 或 "info"
-        """
+        """从 Agent 回复中解析严重程度等级。"""
         response_lower = response.lower()
         
         # 判断严重程度 - 优先检查显式标注
@@ -638,9 +478,9 @@ class AgentInterface:
         return "info"
     
     def clear_memory(self) -> None:
-        """清空对话记忆"""
+        """清空对话记忆并重置上下文。"""
         self.conversation_memory.clear()
     
     def clear_events(self) -> None:
-        """清空事件历史"""
+        """清空事件历史缓存。"""
         self.last_events.clear()

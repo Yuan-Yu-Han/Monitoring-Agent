@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 
 from config import GlobalConfig
 from prompts.prompt_loader import load_prompt
@@ -34,27 +35,24 @@ def build_hybrid_agent() -> Any:
         tools=tools,
         debug=False,
         system_prompt=load_prompt("system_prompt"),
+        checkpointer=InMemorySaver(),
+        middleware=[
+            HumanInTheLoopMiddleware(
+                interrupt_on={
+                    "generate_report": True,
+                    "draw_bboxes": False,
+                    "detect_image": False,
+                    "safe_parse_json": False,
+                    "find_image": False,
+                    "list_images": False,
+                    "validate_image": False,
+                }
+                ,
+                description_prefix="Tool execution pending approval"
+            ),
+        ],
     )
 
 
-def main() -> None:
-    agent = build_hybrid_agent()
-
-    messages = []
-    messages.append({"role": "user", "content": "请检测这张图片中的安全隐患 校验输出的json 并且画bbox图。图片路径是'./inputs/fire1.jpg'"})
-
-    for chunk in agent.stream(  
-        {"messages": messages},
-        stream_mode="updates",
-    ):
-        for step, data in chunk.items():
-            print(f"step: {step}")
-            print(f"content: {data['messages'][-1].content_blocks}")
-
-    # response = agent.invoke(
-    #     {"messages": messages},
-    # )
-    # print(response)
-
 if __name__ == "__main__":
-    main()
+    pass
