@@ -77,6 +77,9 @@ class RAGConfig:
     rrf_k: int = 60
     rerank_k: int = 10
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    embedding_backend: str = "vllm"  # vllm | api
+    api_embed_base_url: str = "https://api.openai.com/v1"
+    api_embed_model: str = "text-embedding-3-small"
 
 
 @dataclass
@@ -139,6 +142,15 @@ class GlobalConfig:
         self.vllm_embed.model_name = os.getenv(
             "VLLM_EMBED_MODEL_NAME", self.vllm_embed.model_name
         )
+        self.rag.embedding_backend = os.getenv(
+            "RAG_EMBEDDING_BACKEND", self.rag.embedding_backend
+        )
+        self.rag.api_embed_base_url = os.getenv(
+            "RAG_API_EMBED_BASE_URL", self.rag.api_embed_base_url
+        )
+        self.rag.api_embed_model = os.getenv(
+            "RAG_API_EMBED_MODEL", self.rag.api_embed_model
+        )
 
         if os.getenv("HYBRID_AGENT_DEBUG", "").lower() in ("true", "1", "yes"):
             self.debug = True
@@ -152,8 +164,13 @@ class GlobalConfig:
             result["warnings"].append("OpenAI API密钥未设置，在线API策略将不可用")
         if not self.vllm_chat.api_key or self.vllm_chat.api_key == "EMPTY":
             result["warnings"].append("vLLM API密钥未设置，本地Agent策略可能不可用")
-        if not self.vllm_embed.model_name:
+        if self.rag.embedding_backend == "vllm" and not self.vllm_embed.model_name:
             result["warnings"].append("vLLM embedding模型未设置，RAG向量检索不可用")
+        if self.rag.embedding_backend == "api":
+            rag_api_key = os.getenv("RAG_API_EMBED_API_KEY", "")
+            openai_key = os.getenv("OPENAI_API_KEY", "")
+            if not rag_api_key and not openai_key:
+                result["warnings"].append("RAG API embedding 密钥未设置（RAG_API_EMBED_API_KEY/OPENAI_API_KEY）")
 
         valid_strategies = ["local_yolo", "qwen_vl", "online_api"]
         if self.detection.default_strategy not in valid_strategies:
@@ -179,6 +196,9 @@ class GlobalConfig:
             result["valid"] = False
         if self.rag.rerank_k < 0:
             result["errors"].append("rag_rerank_k必须大于等于0")
+            result["valid"] = False
+        if self.rag.embedding_backend not in ("vllm", "api"):
+            result["errors"].append("rag_embedding_backend必须是 vllm 或 api")
             result["valid"] = False
 
         return result
@@ -240,6 +260,9 @@ class GlobalConfig:
                 rerank_model=rag_data.get(
                     "rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"
                 ),
+                embedding_backend=rag_data.get("embedding_backend", "vllm"),
+                api_embed_base_url=rag_data.get("api_embed_base_url", "https://api.openai.com/v1"),
+                api_embed_model=rag_data.get("api_embed_model", "text-embedding-3-small"),
             ),
             monitoring=MonitoringConfig(**monitoring_data),
             debug=system_data.get("debug", False),
@@ -297,6 +320,11 @@ def print_config(config: GlobalConfig):
             else "未设置"
         )
     )
+
+    print("\n[RAG]")
+    print(f"  Embedding Backend: {config.rag.embedding_backend}")
+    print(f"  API Embed Base URL: {config.rag.api_embed_base_url}")
+    print(f"  API Embed Model: {config.rag.api_embed_model}")
 
     print("\n[Detection]")
     print(f"  Default Strategy: {config.detection.default_strategy}")

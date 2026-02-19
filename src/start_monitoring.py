@@ -6,6 +6,10 @@ import logging
 from dataclasses import asdict
 
 from config import load_config, MonitoringConfig
+from src.utils.runtime_env import configure_runtime_env
+
+configure_runtime_env()
+
 from src.agent_interface import AgentInterface
 from src.monitoring_system import MonitoringSystem
 

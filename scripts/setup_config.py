@@ -67,6 +67,11 @@ def create_config_file():
         config.agent.verbose = False
 
     print("\n📚 RAG 配置:")
+    rag_backend = input(
+        f"RAG embedding_backend (vllm/api, 当前: {config.rag.embedding_backend}, 留空跳过): "
+    ).strip().lower()
+    if rag_backend in {"vllm", "api"}:
+        config.rag.embedding_backend = rag_backend
     rag_chunk_max_chars = input(
         f"RAG chunk_max_chars (当前: {config.rag.chunk_max_chars}, 留空跳过): "
     ).strip()
@@ -102,6 +107,16 @@ def create_config_file():
     ).strip()
     if rag_rerank_model:
         config.rag.rerank_model = rag_rerank_model
+    rag_api_embed_base_url = input(
+        f"RAG API embed base_url (当前: {config.rag.api_embed_base_url}, 留空跳过): "
+    ).strip()
+    if rag_api_embed_base_url:
+        config.rag.api_embed_base_url = rag_api_embed_base_url
+    rag_api_embed_model = input(
+        f"RAG API embed model (当前: {config.rag.api_embed_model}, 留空跳过): "
+    ).strip()
+    if rag_api_embed_model:
+        config.rag.api_embed_model = rag_api_embed_model
 
     # 保存配置文件
     config_file = Path(__file__).parent.parent / "config.json"
@@ -117,6 +132,9 @@ def create_config_file():
     print(f"   vLLM Chat 模型: {config.vllm_chat.model_name}")
     print(f"   vLLM Embedding 地址: {config.vllm_embed.base_url}")
     print(f"   vLLM Embedding 模型: {config.vllm_embed.model_name}")
+    print(f"   RAG Embedding 后端: {config.rag.embedding_backend}")
+    print(f"   RAG API Embed 地址: {config.rag.api_embed_base_url}")
+    print(f"   RAG API Embed 模型: {config.rag.api_embed_model}")
     print(f"   默认策略: {config.detection.default_strategy}")
     print(f"   Agent 名称: {config.agent.name}")
     print(f"   详细模式: {config.agent.verbose}")
@@ -142,6 +160,12 @@ VLLM_API_KEY=
 VLLM_EMBED_BASE_URL=http://127.0.0.1:8001/v1
 VLLM_EMBED_MODEL_NAME=text-embedding-3-small
 VLLM_EMBED_API_KEY=
+
+# RAG Embedding Backend 配置
+RAG_EMBEDDING_BACKEND=vllm
+RAG_API_EMBED_BASE_URL=https://api.openai.com/v1
+RAG_API_EMBED_MODEL=text-embedding-3-small
+RAG_API_EMBED_API_KEY=
 
 # 系统配置
 HYBRID_AGENT_DEBUG=false
@@ -196,6 +220,7 @@ def test_config():
     print("\n📄 配置信息摘要:")
     print(f"   OpenAI API密钥: {'已设置' if config.get('openai', {}).get('api_key') else '未设置'}")
     print(f"   OpenAI 模型: {config.get('openai', {}).get('model', '未设置')}")
+    print(f"   RAG Embedding 后端: {config.get('rag', {}).get('embedding_backend', '未设置')}")
     print(f"   Agent 名称: {config.get('agent', {}).get('name', '未设置')}")
     print(f"   详细模式: {config.get('agent', {}).get('verbose', False)}")
 

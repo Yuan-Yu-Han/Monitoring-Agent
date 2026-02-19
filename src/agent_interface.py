@@ -6,12 +6,23 @@ from datetime import datetime
 import logging
 import numpy as np
 from enum import Enum
+from pathlib import Path
+import re
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
+from src.utils.runtime_env import configure_runtime_env
+
+configure_runtime_env()
+
+from config import load_config
 from src.system.event_trigger import DetectionEvent, MonitorState
 from src.utils.image_utils import encode_numpy_to_base64
 from src.hybrid_monitoring_agent import build_hybrid_agent
+from src.context_engine.memory.case_memory import CaseMemoryStore, CaseRecord, extract_labels
+from src.context_engine.memory.vector_memory import VectorMemoryStore
+from src.context_engine.orchestrator import build_context_bundle
+from src.context_engine.retrievers import build_event_query
 
 logger = logging.getLogger(__name__)
 
@@ -103,15 +114,29 @@ class AgentInterface:
     
     def __init__(self, agent: Optional[Any] = None, conversation_memory: Optional[ConversationMemory] = None, enable_memory: bool = True):
         """初始化 Agent 接口，允许传入自定义 agent。"""
+        self.config = load_config()
         self.agent = agent or build_hybrid_agent()
         self.conversation_memory = conversation_memory or ConversationMemory()
         self.enable_memory = enable_memory
         self.last_interrupt = None
         self.last_config = None
-        
+
         # 事件上下文缓存（用于丰富提示词）
         self.last_events: List[DetectionEvent] = []
         self.max_event_history = 5
+
+        # 事件计数器，用于生成唯一的thread_id
+        self.event_counter = 0
+
+        # 案例记忆库（持久化到 cache 目录）
+        case_store_path = Path(self.config.cache_dir) / "event_cases.jsonl"
+        self.case_memory = CaseMemoryStore(case_store_path)
+        vector_store_path = Path(self.config.cache_dir) / "vector_memory"
+        self.vector_memory: Optional[VectorMemoryStore] = None
+        try:
+            self.vector_memory = VectorMemoryStore(vector_store_path)
+        except Exception as exc:
+            logger.warning(f"向量记忆初始化失败，将仅使用JSONL记忆: {exc}")
     
     def process(self, input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         """统一入口：处理输入数据并分发到对应路径。"""
@@ -149,8 +174,13 @@ class AgentInterface:
                 self.last_events = self.last_events[-self.max_event_history:]
             # 构建提示词（融合事件上下文 + 对话历史）
             prompt = self._build_event_prompt(event)
+
+            # 使用唯一的thread_id，避免历史累积导致上下文超限
+            self.event_counter += 1
+            thread_id = f"event_{self.event_counter}"
+
             # 合并 tool_args 到 config['configurable']
-            config = {"configurable": {"thread_id": "event_1"}}
+            config = {"configurable": {"thread_id": thread_id}}
             if tool_args:
                 config["configurable"].update(tool_args)
             # 调用 Agent
@@ -172,6 +202,7 @@ class AgentInterface:
                 )
             # 解析 Agent 响应并评估严重性
             agent_response = self._parse_agent_response(response, event)
+            self._remember_event_case(event, agent_response)
             logger.info(
                 f"Agent 响应: severity={agent_response.severity}, "
                 f"escalate={agent_response.should_escalate}"
@@ -189,6 +220,17 @@ class AgentInterface:
         """用户驱动入口，用于处理用户查询。"""
         try:
             logger.info(f"Agent 处理用户查询: {query}")
+
+            # 对寒暄/自我介绍请求走快速路径，避免每次都触发检索路由导致首句响应慢。
+            if self._is_greeting_or_intro(query):
+                fast_reply = (
+                    "您好，我是火灾与安防监控专业助手（SafeGuard Fire Assistant）。"
+                    "我可以进行火情风险研判、监控事件分析、历史案例对比，并给出处置建议。"
+                )
+                if self.enable_memory:
+                    self.conversation_memory.add_message(MessageRole.USER, query, metadata={"image": image is not None})
+                    self.conversation_memory.add_message(MessageRole.ASSISTANT, fast_reply)
+                return AgentResponse(success=True, message=fast_reply, severity="info")
             
             # 添加用户消息到对话记忆
             if self.enable_memory:
@@ -217,6 +259,9 @@ class AgentInterface:
             
             # 解析严重程度
             severity = self._parse_severity_from_response(response)
+
+            # 将用户对话写入案例记忆库，支持后续检索复用
+            self._remember_user_case(query, response, severity, context)
             
             return AgentResponse(
                 success=True,
@@ -231,54 +276,81 @@ class AgentInterface:
                 message=f"处理失败: {str(e)}",
                 severity="error"
             )
+
+    def _is_greeting_or_intro(self, query: str) -> bool:
+        q = query.strip().lower()
+        if not q:
+            return False
+        # 简短寒暄/身份询问，直接快速回复。
+        if len(q) <= 12 and re.search(r"(你好|您好|hi|hello|你是谁|介绍下你自己|自我介绍)", q):
+            return True
+        return False
     
     def _build_event_prompt(self, event: DetectionEvent) -> str:
-        """构建事件分析提示词，融合事件与历史上下文。"""
+        """构建事件分析提示词（精简版，避免上下文超限）。"""
         state_desc = {
             MonitorState.SUSPECT: "检测到可疑情况",
             MonitorState.ALARM: "检测到异常事件",
             MonitorState.IDLE: "恢复正常"
         }
-        
+
         detection_info = "\n".join([
             f"- {det.get('class', '未知')} (置信度: {det.get('confidence', 0):.2f})"
             for det in event.detections
         ])
-        
+
         prompt_parts = []
-        
-        # 如果启用了记忆，添加对话历史（只取最近 3 条）
-        if self.enable_memory:
-            history = self.conversation_memory.get_conversation_context()
-            if history:
-                prompt_parts.append("===== 对话历史 =====")
-                prompt_parts.append(history)
-                prompt_parts.append("")
-        
-        # 添加当前事件信息
-        prompt_parts.append("===== 当前监控事件 =====")
+
+        # 添加当前事件信息（精简版）
+        prompt_parts.append("===== 监控事件 =====")
         prompt_parts.append(f"状态: {state_desc.get(event.state, event.state.value)}")
         prompt_parts.append(f"时间: {event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-        prompt_parts.append(f"检测到的目标:")
-        prompt_parts.append(detection_info if detection_info else "无")
-        
-        # 如果有事件历史，只添加最近 1 个
-        if self.last_events:
-            prompt_parts.append("")
-            prompt_parts.append("===== 最近事件历史 =====")
-            for i, evt in enumerate(self.last_events[-1:], 1):
-                prompt_parts.append(
-                    f"{i}. [{evt.timestamp.strftime('%H:%M:%S')}] "
-                    f"{evt.state.value} - {len(evt.detections)} 个检测"
-                )
-        
-        prompt_parts.append("")
-        prompt_parts.append("===== 分析要求 =====")
-        prompt_parts.append("请简洁地分析:")
-        prompt_parts.append("1. 这是什么情况？")
-        prompt_parts.append("2. 严重程度如何？")
-        prompt_parts.append("3. 是否需要立即处理？")
-        
+
+        # 添加 event_id（关键！让Agent知道如何找到图片）
+        event_id = getattr(event, 'event_id', None)
+        if event_id:
+            prompt_parts.append(f"事件ID: {event_id}")
+
+        prompt_parts.append(f"检测目标: {detection_info if detection_info else '无'}")
+
+        # Layer 1+2: 先做意图识别，再按计划检索 event/chat/knowledge
+        retrieval_query = build_event_query(event)
+        bundle = build_context_bundle(
+            query=retrieval_query,
+            context_kind="event",
+            case_memory=self.case_memory,
+            vector_memory=self.vector_memory,
+            labels=extract_labels(event.detections),
+            top_k=3,
+            use_llm_router=True,
+        )
+        prompt_parts.append(f"\n===== 检索路由 =====")
+        prompt_parts.append(
+            f"use_event_memory={bundle.plan.use_event_memory}, "
+            f"use_chat_memory={bundle.plan.use_chat_memory}, "
+            f"use_knowledge_memory={bundle.plan.use_knowledge_memory}, "
+            f"days={bundle.plan.days if bundle.plan.days else '-'}, "
+            f"reason={bundle.plan.reason}"
+        )
+
+        if bundle.event_memory:
+            prompt_parts.append("\n===== 事件记忆检索 =====")
+            prompt_parts.append(bundle.event_memory)
+        if bundle.chat_memory:
+            prompt_parts.append("\n===== 对话记忆检索 =====")
+            prompt_parts.append(bundle.chat_memory)
+        if bundle.knowledge_memory:
+            prompt_parts.append("\n===== 相关知识库片段（RAG） =====")
+            prompt_parts.append(bundle.knowledge_memory)
+
+        prompt_parts.append("\n===== 任务 =====")
+        if event_id:
+            prompt_parts.append(f"1. 使用 find_image 工具并传入 event_id='{event_id}' 来查找事件图片")
+            prompt_parts.append("2. 使用 detect_image 工具分析图片内容")
+            prompt_parts.append("3. 结合相似案例与RAG知识，给出简洁的风险评估和处置建议")
+        else:
+            prompt_parts.append("请分析当前情况并给出简洁评估。")
+
         return "\n".join(prompt_parts)
     
     def _build_user_prompt(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
@@ -306,8 +378,99 @@ class AgentInterface:
         # 添加用户查询
         prompt_parts.append("===== 用户问题 =====")
         prompt_parts.append(query)
+
+        # Layer 1+2: 先做意图识别，再按计划检索 event/chat/knowledge
+        bundle = build_context_bundle(
+            query=query,
+            context_kind="user",
+            case_memory=self.case_memory,
+            vector_memory=self.vector_memory,
+            labels=None,
+            top_k=3,
+            use_llm_router=True,
+        )
+        prompt_parts.append("")
+        prompt_parts.append("===== 检索路由 =====")
+        prompt_parts.append(
+            f"use_event_memory={bundle.plan.use_event_memory}, "
+            f"use_chat_memory={bundle.plan.use_chat_memory}, "
+            f"use_knowledge_memory={bundle.plan.use_knowledge_memory}, "
+            f"days={bundle.plan.days if bundle.plan.days else '-'}, "
+            f"reason={bundle.plan.reason}"
+        )
+
+        if bundle.event_memory:
+            prompt_parts.append("")
+            prompt_parts.append("===== 事件记忆检索 =====")
+            prompt_parts.append(bundle.event_memory)
+        if bundle.chat_memory:
+            prompt_parts.append("")
+            prompt_parts.append("===== 对话记忆检索 =====")
+            prompt_parts.append(bundle.chat_memory)
+        if bundle.knowledge_memory:
+            prompt_parts.append("")
+            prompt_parts.append("===== 知识库参考（RAG） =====")
+            prompt_parts.append(bundle.knowledge_memory)
         
         return "\n".join(prompt_parts)
+
+    def _remember_event_case(self, event: DetectionEvent, response: AgentResponse) -> None:
+        """将事件及结论保存到案例记忆库。"""
+        try:
+            event_id = getattr(event, "event_id", "") or f"event_{event.timestamp.strftime('%Y%m%d_%H%M%S')}"
+            summary = " ".join(response.message.strip().split())[:240]
+            record = CaseRecord(
+                event_id=event_id,
+                timestamp=event.timestamp.isoformat(),
+                state=event.state.value,
+                severity=response.severity,
+                confidence=float(event.confidence or 0.0),
+                detection_count=len(event.detections or []),
+                labels=extract_labels(event.detections),
+                summary=summary,
+            )
+            self.case_memory.add(record)
+            if self.vector_memory is not None:
+                self.vector_memory.add(record, memory_type="event")
+        except Exception as exc:
+            logger.warning(f"写入案例记忆失败，已忽略: {exc}")
+
+    def _remember_user_case(
+        self,
+        query: str,
+        response_text: str,
+        severity: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """将用户问答写入案例记忆库，便于后续相似问题检索。"""
+        try:
+            now = datetime.now()
+            session_id = (context or {}).get("session_id", "chat")
+            message_count = (context or {}).get("message_count", 0)
+            event_id = f"{session_id}_{message_count or now.strftime('%Y%m%d_%H%M%S')}"
+            latest_labels: List[str] = []
+            if self.last_events:
+                latest_labels = extract_labels(self.last_events[-1].detections)
+
+            summary = " ".join(
+                f"Q: {query.strip()} A: {response_text.strip()}".split()
+            )[:240]
+
+            record = CaseRecord(
+                event_id=event_id,
+                timestamp=now.isoformat(),
+                state="chat",
+                severity=severity,
+                confidence=0.0,
+                detection_count=0,
+                labels=latest_labels,
+                summary=summary,
+            )
+            self.case_memory.add(record)
+            if self.vector_memory is not None:
+                self.vector_memory.add(record, memory_type="chat")
+        except Exception as exc:
+            logger.warning(f"写入对话案例记忆失败，已忽略: {exc}")
     
     def _invoke_agent(self, prompt: str, config: Optional[Dict[str, Any]] = None, stream: bool = False) -> str:
         """调用 Agent，使用 invoke 接口返回文本响应。"""

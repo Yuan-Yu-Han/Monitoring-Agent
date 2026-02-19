@@ -4,6 +4,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List
 
+from src.utils.runtime_env import configure_runtime_env
+
+configure_runtime_env()
+
 import chromadb
 from llama_index.core import Settings, SimpleDirectoryReader, StorageContext, VectorStoreIndex
 from llama_index.embeddings.openai import OpenAIEmbedding

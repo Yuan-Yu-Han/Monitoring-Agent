@@ -43,7 +43,7 @@
       "person"
     ],
     "save_event_frames": true,
-    "save_detection_frames": false,
+    "save_detection_frames": true,
     "output_dir": "./outputs/alarm",
     "detection_save_interval": 30,
     "enable_signal_handling": true,
@@ -74,7 +74,10 @@
     "sparse_k": 5,
     "rrf_k": 60,
     "rerank_k": 10,
-    "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "embedding_backend": "api",
+    "api_embed_base_url": "https://api.openai.com/v1",
+    "api_embed_model": "text-embedding-3-small"
   },
   "debug": false,
   "log_level": "INFO",

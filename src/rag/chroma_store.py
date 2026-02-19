@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict, List
+
+from src.utils.runtime_env import configure_runtime_env
+
+configure_runtime_env()
 
 import requests
 import chromadb
@@ -13,7 +18,7 @@ from src.rag.types import Chunk
 
 
 def _vllm_embed(text: str) -> List[float]:
-    # 使用 embedding 服务配置，避免误用 chat 服务
+    # 使用 vLLM embedding 服务
     base_url = config.vllm_embed.base_url.rstrip("/")
     url = f"{base_url}/embeddings"
     payload = {"model": config.vllm_embed.model_name, "input": text}
@@ -28,9 +33,51 @@ def _vllm_embed(text: str) -> List[float]:
     return data.get("embedding", [])
 
 
+def _api_embed(text: str) -> List[float]:
+    # 预留 API embedding（默认走 OpenAI 兼容接口）
+    base_url = (
+        os.getenv("RAG_API_EMBED_BASE_URL")
+        or config.rag.api_embed_base_url
+        or os.getenv("OPENAI_BASE_URL")
+    ).rstrip("/")
+    model = os.getenv("RAG_API_EMBED_MODEL") or config.rag.api_embed_model
+    api_key = os.getenv("RAG_API_EMBED_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+    if not api_key:
+        raise RuntimeError("API embedding backend enabled but API key is missing.")
+
+    url = f"{base_url}/embeddings"
+    payload = {"model": model, "input": text}
+    headers = {"Authorization": f"Bearer {api_key}"}
+    response = requests.post(url, json=payload, headers=headers, timeout=60)
+    response.raise_for_status()
+    data = response.json()
+    if "data" in data and data["data"]:
+        return data["data"][0].get("embedding", [])
+    return data.get("embedding", [])
+
+
+def _embedding_backend() -> str:
+    backend = (getattr(config.rag, "embedding_backend", "vllm") or "").strip().lower()
+    if backend in {"vllm", "api"}:
+        return backend
+    return "vllm"
+
+
+def _collection_name() -> str:
+    return f"rag_docs_{_embedding_backend()}"
+
+
+def _embed(text: str) -> List[float]:
+    backend = _embedding_backend()
+    if backend == "api":
+        return _api_embed(text)
+    return _vllm_embed(text)
+
+
 def _ensure_collection(persist_dir: str) -> chromadb.api.models.Collection.Collection:
     client = chromadb.PersistentClient(path=persist_dir)
-    return client.get_or_create_collection(name="nomadpilot_docs")
+    name = _collection_name()
+    return client.get_or_create_collection(name=name)
 
 
 def build_index(persist_dir: str) -> None:
@@ -57,8 +104,7 @@ def build_index(persist_dir: str) -> None:
         }
         for c in chunks
     ]
-    embeddings = [_vllm_embed(text) for text in documents]
-
+    embeddings = [_embed(text) for text in documents]
     collection.add(
         ids=ids,
         documents=documents,
@@ -68,12 +114,12 @@ def build_index(persist_dir: str) -> None:
 
 
 def dense_retrieve(query: str, k: int = 3, persist_dir: str | None = None) -> List[Chunk]:
-    persist_path = persist_dir or str(Path("data/chroma").resolve())
+    persist_path = persist_dir or str(Path("rag_data/chroma").resolve())
     collection = _ensure_collection(persist_path)
     if collection.count() == 0:
         build_index(persist_path)
 
-    query_embedding = _vllm_embed(query)
+    query_embedding = _embed(query)
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=k,

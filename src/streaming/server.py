@@ -15,7 +15,7 @@ import sys
 import signal
 import argparse
 import requests
-from flask import Flask, render_template, jsonify
+from flask import Flask, jsonify
 from flask_socketio import SocketIO, emit
 import logging
 
@@ -25,7 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, template_folder='.')
+app = Flask(__name__)
 app.config['SECRET_KEY'] = 'streaming-server-key'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
@@ -53,8 +53,13 @@ stream_info = {
 
 @app.route('/')
 def index():
-    """主页"""
-    return render_template('index.html')
+    """服务根路径（不再提供独立 RTSP 预览页）"""
+    return jsonify({
+        'service': 'rtsp-websocket-stream',
+        'message': 'RTSP preview page has been removed. Use dashboard left monitor panel.',
+        'status_endpoint': '/status',
+        'health_endpoint': '/health'
+    }), 200
 
 
 @app.route('/health', methods=['GET'])

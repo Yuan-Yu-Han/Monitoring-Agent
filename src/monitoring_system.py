@@ -152,7 +152,10 @@ class MonitoringSystem:
         # 线程控制
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
-        
+
+        # Agent 异步执行管理
+        self._agent_threads: List[threading.Thread] = []
+
         logger.info("✅ 系统初始化完成")
     
     def _init_components(self):
@@ -310,7 +313,7 @@ class MonitoringSystem:
                 self._handle_error(f"处理帧异常: {e}")
     
     def _process_event(self, event: DetectionEvent):
-        """处理事件，支持可选保存帧，内存分析，调用 Agent"""
+        """处理事件，支持可选保存帧，内存分析，调用 Agent（异步）"""
         self.stats.event_count += 1
         logger.info(f"⚡ 事件 #{self.stats.event_count}: {event.state.value}")
 
@@ -320,9 +323,33 @@ class MonitoringSystem:
             if save_frame and event.frame is not None:
                 self._save_event_frame(event)
 
-            # 直接调用 Agent（接口层），仅传 event_id
+            # 异步调用 Agent（在后台线程执行，不阻塞主循环）
             event_id = getattr(event, 'event_id', None)
             tool_args = {"event_id": event_id} if event_id else None
+
+            agent_thread = threading.Thread(
+                target=self._process_event_async,
+                args=(event, tool_args),
+                daemon=True,
+                name=f"AgentThread-{event_id}"
+            )
+            agent_thread.start()
+            self._agent_threads.append(agent_thread)
+
+            # 清理已完成的线程
+            self._agent_threads = [t for t in self._agent_threads if t.is_alive()]
+
+            logger.debug(f"Agent 线程已启动，当前活跃线程: {len(self._agent_threads)}")
+
+        except Exception as e:
+            logger.error(f"处理事件异常: {e}", exc_info=True)
+            self.stats.error_count += 1
+            self._handle_error(str(e))
+
+    def _process_event_async(self, event: DetectionEvent, tool_args: Optional[Dict[str, Any]] = None):
+        """异步执行 Agent 处理（在后台线程中运行）"""
+        try:
+            # 调用 Agent（接口层）
             response = self.agent_interface.handle_event(event, tool_args=tool_args)
 
             # 更新统计
@@ -339,7 +366,7 @@ class MonitoringSystem:
                     logger.error(f"事件回调异常: {e}")
 
         except Exception as e:
-            logger.error(f"处理事件异常: {e}", exc_info=True)
+            logger.error(f"Agent 异步处理失败: {e}", exc_info=True)
             self.stats.error_count += 1
             self._handle_error(str(e))
     
@@ -557,11 +584,19 @@ class MonitoringSystem:
     def _cleanup(self):
         """清理资源"""
         logger.info("清理资源...")
+
+        # 等待所有 Agent 线程完成（最多等待10秒）
+        if self._agent_threads:
+            logger.info(f"等待 {len(self._agent_threads)} 个 Agent 线程完成...")
+            for thread in self._agent_threads:
+                thread.join(timeout=10.0)
+            logger.info("所有 Agent 线程已完成")
+
         try:
             self.frame_extractor.disconnect()
         except Exception as e:
             logger.warning(f"断开 RTSP 连接失败: {e}")
-        
+
         logger.info(
             f"✅ 监控已停止。\n"
             f"  总处理帧数: {self.stats.frame_count}\n"

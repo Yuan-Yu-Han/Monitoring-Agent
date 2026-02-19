@@ -26,7 +26,7 @@ class FrameExtractorConfig:
     resize_width: Optional[int] = None  # 缩放宽度（None 表示不缩放）
     resize_height: Optional[int] = None # 缩放高度
     reconnect_interval: int = 5         # 重连间隔（秒）
-    max_reconnect_attempts: int = -1    # 最大重连次数（-1 表示无限）
+    max_reconnect_attempts: int = 5    # 最大重连次数（-1 表示无限）
     use_tcp: bool = True                # 使用 TCP 传输（更稳定，但延迟稍高）
 
 

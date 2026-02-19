@@ -50,8 +50,8 @@ class DetectionEvent:
 class EventTriggerConfig:
     """事件触发器配置"""
     # 检测阈值
-    suspect_threshold: int = 2      # 连续检测多少次进入怀疑状态
-    alarm_threshold: int = 5        # 连续检测多少次进入报警状态
+    suspect_threshold: int = 5      # 连续检测多少次进入怀疑状态
+    alarm_threshold: int = 10        # 连续检测多少次进入报警状态
     idle_threshold: int = 10        # 连续多少次无检测回到空闲状态
     
     # 置信度阈值
