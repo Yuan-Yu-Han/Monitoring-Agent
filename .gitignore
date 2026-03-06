@@ -26,3 +26,27 @@ logs/
 
 # Mac
 .DS_Store
+
+cache/
+
+# Monorepo layout
+backend/logs/
+backend/outputs/
+backend/__pycache__/
+backend/cache/
+backend/rag_data/
+
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend/.vercel/
+frontend/.env
+frontend/.env.local
+frontend/.env*.local
+
+backend/.env
+backend/.env.local
+.env
+.env.local
+.env*.local
