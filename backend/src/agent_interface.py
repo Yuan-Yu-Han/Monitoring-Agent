@@ -112,14 +112,55 @@ class AgentResponse:
 class AgentInterface:
     """Agent 调用接口，包含事件驱动与用户驱动两种模式。"""
     
-    def __init__(self, agent: Optional[Any] = None, conversation_memory: Optional[ConversationMemory] = None, enable_memory: bool = True):
+    def __init__(
+        self,
+        agent: Optional[Any] = None,
+        conversation_memory: Optional[ConversationMemory] = None,
+        enable_memory: Optional[bool] = None,
+        enable_retrieval: Optional[bool] = None,
+        retrieval_targets: Optional[List[str]] = None,
+    ):
         """初始化 Agent 接口，允许传入自定义 agent。"""
         self.config = load_config()
         self.agent = agent or build_hybrid_agent()
         self.conversation_memory = conversation_memory or ConversationMemory()
-        self.enable_memory = enable_memory
+        cfg_agent = getattr(self.config, "agent", None)
+        # Default behaviors (can be overridden per request via context flags)
+        self.default_enable_memory = (
+            bool(getattr(cfg_agent, "enable_memory", False))
+            if enable_memory is None
+            else bool(enable_memory)
+        )
+
+        cfg_targets = getattr(cfg_agent, "retrieval_targets", None)
+        if isinstance(cfg_targets, list):
+            cfg_targets_list = [
+                str(t).strip().lower()
+                for t in cfg_targets
+                if str(t).strip().lower() in ("event", "chat", "knowledge")
+            ]
+        else:
+            cfg_targets_list = []
+        self.default_retrieval_targets = (
+            cfg_targets_list
+            if retrieval_targets is None
+            else [
+                str(t).strip().lower()
+                for t in retrieval_targets
+                if str(t).strip().lower() in ("event", "chat", "knowledge")
+            ]
+        )
+
+        # Backward-compatible constructor switch: enable_retrieval True => all targets
+        if enable_retrieval is True and not self.default_retrieval_targets:
+            self.default_retrieval_targets = ["event", "chat", "knowledge"]
+        if enable_retrieval is False:
+            self.default_retrieval_targets = []
+
+        self.expose_retrieval_debug = bool(getattr(cfg_agent, "expose_retrieval_debug", False))
         self.last_interrupt = None
         self.last_config = None
+        self._stream_queue = None  # set during handle_user_query_stream
 
         # 事件上下文缓存（用于丰富提示词）
         self.last_events: List[DetectionEvent] = []
@@ -131,12 +172,15 @@ class AgentInterface:
         # 案例记忆库（持久化到 cache 目录）
         case_store_path = Path(self.config.cache_dir) / "event_cases.jsonl"
         self.case_memory = CaseMemoryStore(case_store_path)
-        vector_store_path = Path(self.config.cache_dir) / "vector_memory"
+        # 向量记忆（由 config.json rag.enable_vector_memory 控制）
         self.vector_memory: Optional[VectorMemoryStore] = None
-        try:
-            self.vector_memory = VectorMemoryStore(vector_store_path)
-        except Exception as exc:
-            logger.warning(f"向量记忆初始化失败，将仅使用JSONL记忆: {exc}")
+        if getattr(self.config.rag, "enable_vector_memory", False):
+            vector_store_path = Path(self.config.cache_dir) / "vector_memory"
+            try:
+                self.vector_memory = VectorMemoryStore(vector_store_path)
+                logger.info("向量记忆已启用")
+            except Exception as exc:
+                logger.warning(f"向量记忆初始化失败，将仅使用JSONL记忆: {exc}")
     
     def process(self, input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         """统一入口：处理输入数据并分发到对应路径。"""
@@ -220,6 +264,8 @@ class AgentInterface:
         """用户驱动入口，用于处理用户查询。"""
         try:
             logger.info(f"Agent 处理用户查询: {query}")
+            ctx = context or {}
+            enable_conversation_memory = bool(ctx.get("enable_memory", self.default_enable_memory))
 
             # 对寒暄/自我介绍请求走快速路径，避免每次都触发检索路由导致首句响应慢。
             if self._is_greeting_or_intro(query):
@@ -227,13 +273,13 @@ class AgentInterface:
                     "您好，我是火灾与安防监控专业助手（SafeGuard Fire Assistant）。"
                     "我可以进行火情风险研判、监控事件分析、历史案例对比，并给出处置建议。"
                 )
-                if self.enable_memory:
+                if enable_conversation_memory:
                     self.conversation_memory.add_message(MessageRole.USER, query, metadata={"image": image is not None})
                     self.conversation_memory.add_message(MessageRole.ASSISTANT, fast_reply)
                 return AgentResponse(success=True, message=fast_reply, severity="info")
             
             # 添加用户消息到对话记忆
-            if self.enable_memory:
+            if enable_conversation_memory:
                 self.conversation_memory.add_message(
                     MessageRole.USER,
                     query,
@@ -241,7 +287,7 @@ class AgentInterface:
                 )
             
             # 构建提示词（融合对话历史 + 事件上下文 + 用户查询）
-            prompt = self._build_user_prompt(query, context)
+            prompt = self._build_user_prompt(query, ctx)
             
             # 调用 Agent
             response = self._invoke_agent(
@@ -251,7 +297,7 @@ class AgentInterface:
             )
             
             # 添加 Assistant 消息到对话记忆
-            if self.enable_memory:
+            if enable_conversation_memory:
                 self.conversation_memory.add_message(
                     MessageRole.ASSISTANT,
                     response
@@ -277,12 +323,44 @@ class AgentInterface:
                 severity="error"
             )
 
+    def handle_user_query_stream(self, query: str, context, event_queue) -> None:
+        """Streaming version: puts typed events into event_queue, then a final 'done'/'error' event."""
+        import io
+        import sys
+
+        self._stream_queue = event_queue
+
+        # Redirect stdout so tool print() output is captured as 'tool_output' events
+        original_stdout = sys.stdout
+
+        class ToolCapture(io.TextIOBase):
+            def write(self_, s):  # noqa: N805
+                if isinstance(s, str) and s.strip():
+                    event_queue.put({"type": "tool_output", "content": s})
+                return len(s) if s else 0
+            def flush(self_):
+                pass
+
+        sys.stdout = ToolCapture()
+        try:
+            resp = self.handle_user_query(query, context)
+            event_queue.put({"type": "done", "message": resp.message, "severity": resp.severity})
+        except Exception as exc:
+            event_queue.put({"type": "error", "message": str(exc)})
+        finally:
+            sys.stdout = original_stdout
+            self._stream_queue = None
+
     def _is_greeting_or_intro(self, query: str) -> bool:
         q = query.strip().lower()
         if not q:
             return False
-        # 简短寒暄/身份询问，直接快速回复。
-        if len(q) <= 12 and re.search(r"(你好|您好|hi|hello|你是谁|介绍下你自己|自我介绍)", q):
+        # 纯寒暄/身份询问才走快速路径，含任务关键词的不触发
+        task_keywords = ["检测", "分析", "查询", "告警", "图片", "视频", "fire", "smoke", "detect", "报告", "风险", "帮我", "帮忙"]
+        if any(kw in q for kw in task_keywords):
+            return False
+        pure_greetings = {"你好", "您好", "hi", "hello", "你是谁", "介绍下你自己", "自我介绍", "hey"}
+        if q in pure_greetings:
             return True
         return False
     
@@ -315,33 +393,45 @@ class AgentInterface:
 
         # Layer 1+2: 先做意图识别，再按计划检索 event/chat/knowledge
         retrieval_query = build_event_query(event)
-        bundle = build_context_bundle(
-            query=retrieval_query,
-            context_kind="event",
-            case_memory=self.case_memory,
-            vector_memory=self.vector_memory,
-            labels=extract_labels(event.detections),
-            top_k=3,
-            use_llm_router=True,
-        )
-        prompt_parts.append(f"\n===== 检索路由 =====")
-        prompt_parts.append(
-            f"use_event_memory={bundle.plan.use_event_memory}, "
-            f"use_chat_memory={bundle.plan.use_chat_memory}, "
-            f"use_knowledge_memory={bundle.plan.use_knowledge_memory}, "
-            f"days={bundle.plan.days if bundle.plan.days else '-'}, "
-            f"reason={bundle.plan.reason}"
-        )
+        targets = list(self.default_retrieval_targets or [])
+        enable_retrieval = bool(targets)
+        enable_event_mem = "event" in targets
+        enable_chat_mem = "chat" in targets
+        enable_knowledge = "knowledge" in targets
 
-        if bundle.event_memory:
-            prompt_parts.append("\n===== 事件记忆检索 =====")
-            prompt_parts.append(bundle.event_memory)
-        if bundle.chat_memory:
-            prompt_parts.append("\n===== 对话记忆检索 =====")
-            prompt_parts.append(bundle.chat_memory)
-        if bundle.knowledge_memory:
-            prompt_parts.append("\n===== 相关知识库片段（RAG） =====")
-            prompt_parts.append(bundle.knowledge_memory)
+        if enable_retrieval:
+            bundle = build_context_bundle(
+                query=retrieval_query,
+                context_kind="event",
+                case_memory=self.case_memory,
+                vector_memory=self.vector_memory,
+                labels=extract_labels(event.detections),
+                top_k=3,
+                use_llm_router=True,
+                enable_event_memory=enable_event_mem,
+                enable_chat_memory=enable_chat_mem,
+                enable_knowledge_memory=enable_knowledge,
+            )
+
+            if (self.config.debug or self.expose_retrieval_debug):
+                prompt_parts.append(f"\n===== 检索路由（调试） =====")
+                prompt_parts.append(
+                    f"use_event_memory={bundle.plan.use_event_memory}, "
+                    f"use_chat_memory={bundle.plan.use_chat_memory}, "
+                    f"use_knowledge_memory={bundle.plan.use_knowledge_memory}, "
+                    f"days={bundle.plan.days if bundle.plan.days else '-'}, "
+                    f"reason={bundle.plan.reason}"
+                )
+
+            if enable_event_mem and bundle.event_memory:
+                prompt_parts.append("\n===== 相关事件记录（参考） =====")
+                prompt_parts.append(bundle.event_memory)
+            if enable_chat_mem and bundle.chat_memory:
+                prompt_parts.append("\n===== 相关对话记录（参考） =====")
+                prompt_parts.append(bundle.chat_memory)
+            if enable_knowledge and bundle.knowledge_memory:
+                prompt_parts.append("\n===== 相关知识片段（参考） =====")
+                prompt_parts.append(bundle.knowledge_memory)
 
         prompt_parts.append("\n===== 任务 =====")
         if event_id:
@@ -356,9 +446,11 @@ class AgentInterface:
     def _build_user_prompt(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
         """构建用户查询提示词，融合对话与事件上下文。"""
         prompt_parts = []
+        ctx = context or {}
         
         # 添加对话历史（只取最近 3 条）
-        if self.enable_memory:
+        enable_conversation_memory = bool(ctx.get("enable_memory", self.default_enable_memory))
+        if enable_conversation_memory:
             history = self.conversation_memory.get_conversation_context()
             if history:
                 prompt_parts.append("===== 对话上下文 =====")
@@ -379,38 +471,75 @@ class AgentInterface:
         prompt_parts.append("===== 用户问题 =====")
         prompt_parts.append(query)
 
-        # Layer 1+2: 先做意图识别，再按计划检索 event/chat/knowledge
-        bundle = build_context_bundle(
-            query=query,
-            context_kind="user",
-            case_memory=self.case_memory,
-            vector_memory=self.vector_memory,
-            labels=None,
-            top_k=3,
-            use_llm_router=True,
-        )
-        prompt_parts.append("")
-        prompt_parts.append("===== 检索路由 =====")
-        prompt_parts.append(
-            f"use_event_memory={bundle.plan.use_event_memory}, "
-            f"use_chat_memory={bundle.plan.use_chat_memory}, "
-            f"use_knowledge_memory={bundle.plan.use_knowledge_memory}, "
-            f"days={bundle.plan.days if bundle.plan.days else '-'}, "
-            f"reason={bundle.plan.reason}"
-        )
+        # Unified request flag: retrieval_targets
+        req_targets = ctx.get("retrieval_targets", None)
+        if req_targets is None:
+            # Backward-compatible request flags:
+            if ctx.get("enable_retrieval") is True:
+                req_targets = ["event", "chat", "knowledge"]
+            elif ctx.get("enable_retrieval") is False:
+                req_targets = []
+            else:
+                # Legacy per-source flags
+                legacy = []
+                if ctx.get("enable_event_memory_retrieval") is True:
+                    legacy.append("event")
+                if ctx.get("enable_chat_memory_retrieval") is True:
+                    legacy.append("chat")
+                if ctx.get("enable_knowledge_memory") is True:
+                    legacy.append("knowledge")
+                req_targets = legacy if legacy else self.default_retrieval_targets
 
-        if bundle.event_memory:
-            prompt_parts.append("")
-            prompt_parts.append("===== 事件记忆检索 =====")
-            prompt_parts.append(bundle.event_memory)
-        if bundle.chat_memory:
-            prompt_parts.append("")
-            prompt_parts.append("===== 对话记忆检索 =====")
-            prompt_parts.append(bundle.chat_memory)
-        if bundle.knowledge_memory:
-            prompt_parts.append("")
-            prompt_parts.append("===== 知识库参考（RAG） =====")
-            prompt_parts.append(bundle.knowledge_memory)
+        if not isinstance(req_targets, list):
+            req_targets = []
+        targets = [
+            str(t).strip().lower()
+            for t in req_targets
+            if str(t).strip().lower() in ("event", "chat", "knowledge")
+        ]
+        enable_retrieval = bool(targets)
+        enable_event_mem = "event" in targets
+        enable_chat_mem = "chat" in targets
+        enable_knowledge = "knowledge" in targets
+
+        if enable_retrieval:
+            # Layer 1+2: 先做意图识别，再按计划检索 event/chat/knowledge
+            bundle = build_context_bundle(
+                query=query,
+                context_kind="user",
+                case_memory=self.case_memory,
+                vector_memory=self.vector_memory,
+                labels=None,
+                top_k=3,
+                use_llm_router=True,
+                enable_event_memory=enable_event_mem,
+                enable_chat_memory=enable_chat_mem,
+                enable_knowledge_memory=enable_knowledge,
+            )
+
+            if (self.config.debug or self.expose_retrieval_debug):
+                prompt_parts.append("")
+                prompt_parts.append("===== 检索路由（调试） =====")
+                prompt_parts.append(
+                    f"use_event_memory={bundle.plan.use_event_memory}, "
+                    f"use_chat_memory={bundle.plan.use_chat_memory}, "
+                    f"use_knowledge_memory={bundle.plan.use_knowledge_memory}, "
+                    f"days={bundle.plan.days if bundle.plan.days else '-'}, "
+                    f"reason={bundle.plan.reason}"
+                )
+
+            if enable_event_mem and bundle.event_memory:
+                prompt_parts.append("")
+                prompt_parts.append("===== 相关事件记录（参考） =====")
+                prompt_parts.append(bundle.event_memory)
+            if enable_chat_mem and bundle.chat_memory:
+                prompt_parts.append("")
+                prompt_parts.append("===== 相关对话记录（参考） =====")
+                prompt_parts.append(bundle.chat_memory)
+            if enable_knowledge and bundle.knowledge_memory:
+                prompt_parts.append("")
+                prompt_parts.append("===== 相关知识片段（参考） =====")
+                prompt_parts.append(bundle.knowledge_memory)
         
         return "\n".join(prompt_parts)
 
@@ -482,52 +611,79 @@ class AgentInterface:
                 self.last_config = config
 
                 if stream and hasattr(self.agent, "stream"):
-                    result_text = None
-                    for chunk in self.agent.stream(
+                    from langchain_core.messages import AIMessageChunk
+                    from langchain_core.messages import ToolMessage as LCToolMessage
+                    result_text = ""
+                    seen_tools: set = set()
+
+                    for item in self.agent.stream(
                         {"messages": messages},
-                        stream_mode="updates",
-                        config=config
+                        stream_mode="messages",
+                        config=config,
                     ):
-                        if "__interrupt__" in chunk:
-                            self.last_interrupt = chunk["__interrupt__"]
-                            return ""
+                        # stream_mode="messages" yields (chunk, metadata) tuples
+                        if not (isinstance(item, tuple) and len(item) == 2):
+                            if isinstance(item, dict) and "__interrupt__" in item:
+                                self.last_interrupt = item["__interrupt__"]
+                                return ""
+                            continue
+                        chunk, metadata = item
 
-                        for step, update in chunk.items():
-                            if not isinstance(update, dict):
-                                continue
-                            messages_list = update.get("messages") or []
-                            if not messages_list:
-                                continue
-                            last_message = messages_list[-1]
-                            content_blocks = getattr(last_message, "content_blocks", None)
-                            if isinstance(content_blocks, list):
-                                text_parts = []
-                                for block in content_blocks:
+                        if isinstance(chunk, AIMessageChunk):
+                            # ── Text tokens ──────────────────────────────
+                            content = chunk.content
+                            if isinstance(content, str) and content:
+                                result_text += content
+                                if self._stream_queue is not None:
+                                    self._stream_queue.put({"type": "token", "content": content})
+                                else:
+                                    print(content, end="", flush=True)
+                            elif isinstance(content, list):
+                                for block in content:
                                     if isinstance(block, dict) and block.get("type") == "text":
-                                        text_parts.append(block.get("text", ""))
-                                text = "".join(text_parts).strip()
-                                if text:
-                                    print(text, flush=True)
+                                        text = block.get("text", "")
+                                        if text:
+                                            result_text += text
+                                            if self._stream_queue is not None:
+                                                self._stream_queue.put({"type": "token", "content": text})
+                                            else:
+                                                print(text, end="", flush=True)
 
-                            tool_calls = getattr(last_message, "tool_calls", None)
-                            if tool_calls:
-                                print(f"step: {step}", flush=True)
-                                tool_names = []
-                                for call in tool_calls:
-                                    if isinstance(call, dict):
-                                        tool_names.append(call.get("name", "unknown"))
+                            # ── Tool calls (name arrives in tool_call_chunks first) ──
+                            for tc in (getattr(chunk, "tool_call_chunks", None) or []):
+                                name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                                if name and name not in seen_tools:
+                                    seen_tools.add(name)
+                                    if self._stream_queue is not None:
+                                        self._stream_queue.put({"type": "tool_call", "names": [name]})
                                     else:
-                                        tool_names.append(getattr(call, "name", "unknown"))
-                                print(f"[tools] {', '.join(tool_names)}", flush=True)
+                                        print(f"\n[tools] {name}", flush=True)
 
-                            if hasattr(last_message, "content") and last_message.content:
-                                result_text = last_message.content
-                            elif isinstance(last_message, dict):
-                                result_text = last_message.get("content", result_text)
+                        elif isinstance(chunk, LCToolMessage):
+                            # ── Tool output ───────────────────────────────
+                            tool_out = str(chunk.content or "")
+                            if tool_out:
+                                if self._stream_queue is not None:
+                                    self._stream_queue.put({"type": "tool_output", "content": tool_out})
+                                else:
+                                    print(tool_out, flush=True)
+                        else:
+                            # ── Final complete AIMessage (LangGraph emits one at end) ──
+                            # Use it as fallback if no tokens were streamed (e.g. streaming not supported by LLM)
+                            if not result_text:
+                                from langchain_core.messages import AIMessage as LCAIMessage
+                                if isinstance(chunk, LCAIMessage):
+                                    raw = chunk.content
+                                    if isinstance(raw, str):
+                                        result_text = raw
+                                    elif isinstance(raw, list):
+                                        result_text = "".join(
+                                            b.get("text", "") for b in raw
+                                            if isinstance(b, dict) and b.get("type") == "text"
+                                        )
 
                     if result_text:
-                        return result_text
-
+                        return result_text.strip()
                     return ""
 
                 if config:
@@ -581,10 +737,22 @@ class AgentInterface:
                 if not messages_list:
                     continue
                 last_message = messages_list[-1]
-                if hasattr(last_message, "content") and last_message.content:
-                    result_text = last_message.content
-                elif isinstance(last_message, dict):
-                    result_text = last_message.get("content", result_text)
+                raw = (
+                    last_message.get("content", None)
+                    if isinstance(last_message, dict)
+                    else getattr(last_message, "content", None)
+                )
+                if raw:
+                    if isinstance(raw, str) and raw.strip():
+                        result_text = raw
+                    elif isinstance(raw, list):
+                        parts = [
+                            b.get("text", "") for b in raw
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        extracted = "".join(parts).strip()
+                        if extracted:
+                            result_text = extracted
 
         self.last_interrupt = None
         return result_text or ""

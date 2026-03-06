@@ -6,10 +6,10 @@
 MODEL="/projects/yuan0165/Qwen3-VL-Embedding-2B"
 PORT=8001
 
-LOG_DIR="./logs/services/qwen_embed"
+LOG_DIR="./backend/logs/services/qwen_embed"
 mkdir -p "$LOG_DIR"
 
-OUTPUT_DIR="./outputs"
+OUTPUT_DIR="./backend/outputs"
 mkdir -p "$OUTPUT_DIR"
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")

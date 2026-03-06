@@ -28,6 +28,10 @@ def build_hybrid_agent() -> Any:
         model=config.vllm_chat.model_name,
         api_key=config.vllm_chat.api_key,
         base_url=config.vllm_chat.base_url,
+        streaming=True,          # 必须显式开启，否则 stream_mode="messages" 无法逐 token 输出
+        max_tokens=None,         # 不传限制，让 vLLM 按剩余 context 自动决定
+        temperature=config.vllm_chat.temperature,
+        timeout=config.vllm_chat.timeout,
     )
 
     tools = [
@@ -56,7 +60,7 @@ def build_hybrid_agent() -> Any:
         middleware=[
             HumanInTheLoopMiddleware(
                 interrupt_on={
-                    "generate_report": True,
+                    "generate_report": False,
                     "draw_bboxes": False,
                     "detect_image": False,
                     "safe_parse_json": False,

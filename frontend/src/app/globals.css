@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+:root {
+  /* ── Backgrounds ── */
+  --bg:           #F1F5F9;
+  --panel:        rgba(255, 255, 255, 0.92);
+  --panel-2:      rgba(241, 245, 249, 0.85);
+  --panel-hover:  rgba(226, 232, 240, 0.95);
+
+  /* ── Text hierarchy (Apple system labels) ── */
+  --t1: rgba(10, 10, 15, 0.96);
+  --t2: rgba(40, 40, 50, 0.72);
+  --t3: rgba(60, 60, 67, 0.50);
+  --t4: rgba(60, 60, 67, 0.22);
+
+  /* ── Apple system colors ── */
+  --blue:   #007AFF;
+  --red:    #FF3B30;
+  --orange: #FF9500;
+  --green:  #34C759;
+  --purple: #AF52DE;
+  --teal:   #32ADE6;
+  --yellow: #FFD60A;
+
+  /* ── Tinted backgrounds ── */
+  --blue-a:   rgba(0,   122, 255, 0.10);
+  --red-a:    rgba(255,  59,  48, 0.10);
+  --orange-a: rgba(255, 149,   0, 0.10);
+  --green-a:  rgba(52,  199,  89, 0.10);
+  --purple-a: rgba(175,  82, 222, 0.10);
+
+  /* ── Separators & borders ── */
+  --sep:    rgba(60, 60, 67, 0.20);
+  --border: rgba(0, 0, 0, 0.09);
+  --border-active: rgba(0, 122, 255, 0.50);
+
+  /* ── Glass ── */
+  --glass-blur:   blur(20px) saturate(180%);
+  --radius:       16px;
+  --radius-sm:    12px;
+  --radius-pill:  100px;
+  --gap:          16px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #__next {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--t1);
+  font-family: -apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Glass panel ─────────────────────────────────────────────── */
+.panel {
+  background: var(--panel);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 8px 32px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+}
+
+.panel-col {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ── Panel header ─────────────────────────────────────────────── */
+.panel-hd {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  height: 42px;
+  flex-shrink: 0;
+  border-bottom: 0.5px solid var(--sep);
+  gap: 8px;
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--t2);
+}
+
+/* ── Mono for data ──────────────────────────────────────────────── */
+.font-mono, .tabular-nums {
+  font-family: "SF Mono", ui-monospace, "Menlo", monospace;
+}
+
+/* ── Textarea placeholder ───────────────────────────────────────── */
+textarea::placeholder, input::placeholder {
+  color: var(--t3);
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.22); }
+
+/* ── Live pulse ─────────────────────────────────────────────────── */
+@keyframes live-pulse {
+  0%,100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+.live-dot { animation: live-pulse 2s ease-in-out infinite; }
+
+/* ── Resize handles ─────────────────────────────────────────────── */
+.resize-handle-v {
+  width: 16px;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 150ms;
+}
+.resize-handle-v::after {
+  content: "";
+  width: 1px;
+  height: 32px;
+  background: var(--sep);
+  border-radius: 1px;
+  transition: height 200ms, background 200ms;
+}
+.resize-handle-v:hover::after,
+.resize-handle-v[data-resize-handle-active]::after {
+  background: var(--border-active);
+  height: 48px;
+}
+
+.resize-handle-h {
+  height: 20px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.resize-handle-h::after {
+  content: "";
+  height: 1px;
+  width: 32px;
+  background: var(--sep);
+  border-radius: 1px;
+  transition: width 200ms, background 200ms;
+}
+.resize-handle-h:hover::after,
+.resize-handle-h[data-resize-handle-active]::after {
+  background: var(--border-active);
+  width: 48px;
+}

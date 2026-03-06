@@ -15,6 +15,7 @@ from llama_index.llms.openai import OpenAI
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from config import config
+from src.utils.openai_compat import clamp_max_tokens
 
 
 def _data_dir() -> Path:
@@ -37,7 +38,7 @@ def _build_settings() -> None:
         api_key=config.vllm_chat.api_key,
         model=config.vllm_chat.model_name,
         temperature=config.vllm_chat.temperature,
-        max_tokens=config.vllm_chat.max_tokens,
+        max_tokens=clamp_max_tokens(getattr(config.vllm_chat, "max_tokens", None), hard_cap=2048),
     )
     Settings.chunk_size = config.rag.chunk_max_chars
     Settings.chunk_overlap = config.rag.chunk_overlap

@@ -5,18 +5,21 @@
 ### 监控模式
 
 ```bash
-python src/start_monitoring.py --rtsp rtsp://127.0.0.1:8554/mystream
+cd backend
+python3 -m src.start_monitoring --rtsp rtsp://127.0.0.1:8554/mystream
 ```
 
 ### 监控 + 交互
 
 ```bash
-python src/start_monitoring.py --rtsp rtsp://127.0.0.1:8554/mystream --interactive
+cd backend
+python3 -m src.start_monitoring --rtsp rtsp://127.0.0.1:8554/mystream --interactive
 ```
 
 ## 入口说明
 
-- `src/start_monitoring.py`：统一入口，支持监控与交互。
+- `backend/src/start_monitoring.py`：统一入口，支持监控与交互。
+- `main.py`：项目根入口（会转到 `backend/main.py`）。
 
 ## Unified Entry
 
@@ -32,7 +35,7 @@ python3 main.py
 This starts:
 - stream server (`5002`)
 - dashboard API (`8010`)
-- monitoring (`src/start_monitoring.py`)
+- monitoring (`backend/src/start_monitoring.py`)
 
 If you also want to auto-start frontend dev:
 

@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 
 # 加载 .env 文件
 env_path = Path(__file__).parent / ".env" # .env 文件与 config.py 在同一目录
-load_dotenv(dotenv_path=env_path)
+# 这里必须 override=True：否则若进程环境里已有同名变量（可能是旧值/空值），.env 不会生效，导致鉴权 401 等问题
+load_dotenv(dotenv_path=env_path, override=True)
 
 
 @dataclass
@@ -53,6 +54,12 @@ class AgentConfig:
     verbose: bool = True
     memory_size: int = 50
     enable_tools: bool = True
+    # Prompt/context controls (opt-in per request).
+    # - enable_memory: whether to inject conversation history into prompts
+    # - retrieval_targets: which retrieval sources are allowed ("event", "chat", "knowledge")
+    enable_memory: bool = False
+    retrieval_targets: List[str] = field(default_factory=list)
+    expose_retrieval_debug: bool = False  # include routing/debug blocks in prompt
     tools_enabled: List[str] = field(default_factory=lambda: [
         "detect_image",
         "safe_parse_json",
@@ -77,6 +84,7 @@ class RAGConfig:
     rrf_k: int = 60
     rerank_k: int = 10
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    enable_vector_memory: bool = False  # True = 开启向量记忆/RAG检索
     embedding_backend: str = "vllm"  # vllm | api
     api_embed_base_url: str = "https://api.openai.com/v1"
     api_embed_model: str = "text-embedding-3-small"
@@ -244,12 +252,59 @@ class GlobalConfig:
         system_data = get_section(data, "system", {})
         rag_data = get_section(data, "rag", {})
         monitoring_data = get_section(data, "monitoring", {})
+        def normalize_agent_data(raw: Dict[str, Any]) -> Dict[str, Any]:
+            """Normalize agent config to current schema while staying backward-compatible."""
+            if not isinstance(raw, dict):
+                return {}
+
+            normalized: Dict[str, Any] = dict(raw)
+
+            # Rename legacy fields
+            if "enable_conversation_memory" in normalized and "enable_memory" not in normalized:
+                normalized["enable_memory"] = normalized.get("enable_conversation_memory")
+
+            # Unify retrieval config
+            targets = normalized.get("retrieval_targets")
+            if targets is None:
+                # Legacy booleans -> targets
+                enable_retrieval = normalized.get("enable_retrieval")
+                if enable_retrieval is False:
+                    targets = []
+                else:
+                    targets = []
+                    if normalized.get("enable_event_memory_retrieval"):
+                        targets.append("event")
+                    if normalized.get("enable_chat_memory_retrieval"):
+                        targets.append("chat")
+                    if normalized.get("enable_knowledge_memory"):
+                        targets.append("knowledge")
+            if not isinstance(targets, list):
+                targets = []
+            normalized["retrieval_targets"] = [
+                str(t).strip().lower()
+                for t in targets
+                if str(t).strip().lower() in ("event", "chat", "knowledge")
+            ]
+
+            # Drop legacy keys to avoid AgentConfig(**data) TypeError
+            for legacy_key in (
+                "enable_conversation_memory",
+                "enable_retrieval",
+                "enable_event_memory_retrieval",
+                "enable_chat_memory_retrieval",
+                "enable_knowledge_memory",
+            ):
+                normalized.pop(legacy_key, None)
+
+            allowed_keys = set(AgentConfig.__dataclass_fields__.keys())
+            return {k: v for k, v in normalized.items() if k in allowed_keys}
+
         return cls(
             openai=OpenAIConfig(**openai_data),
             vllm_chat=VLLMChatConfig(**vllm_data),
             vllm_embed=VLLMEmbedConfig(**vllm_embed_data),
             detection=DetectionConfig(**detection_data),
-            agent=AgentConfig(**agent_data),
+            agent=AgentConfig(**normalize_agent_data(agent_data)),
             rag=RAGConfig(
                 chunk_max_chars=rag_data.get("chunk_max_chars", 800),
                 chunk_overlap=rag_data.get("chunk_overlap", 120),

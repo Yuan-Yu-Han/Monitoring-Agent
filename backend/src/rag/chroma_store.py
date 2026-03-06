@@ -10,6 +10,7 @@ configure_runtime_env()
 
 import requests
 import chromadb
+from requests import exceptions as req_exc
 
 from config import config
 from src.rag.doc_loader import load_docs
@@ -42,14 +43,30 @@ def _api_embed(text: str) -> List[float]:
     ).rstrip("/")
     model = os.getenv("RAG_API_EMBED_MODEL") or config.rag.api_embed_model
     api_key = os.getenv("RAG_API_EMBED_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
-    if not api_key:
+    if not api_key or api_key.strip().upper() == "EMPTY":
         raise RuntimeError("API embedding backend enabled but API key is missing.")
 
     url = f"{base_url}/embeddings"
     payload = {"model": model, "input": text}
     headers = {"Authorization": f"Bearer {api_key}"}
+    # Optional OpenAI headers (some setups use project/org scoping)
+    org = os.getenv("OPENAI_ORG_ID") or os.getenv("OPENAI_ORGANIZATION")
+    project = os.getenv("OPENAI_PROJECT") or os.getenv("OPENAI_PROJECT_ID")
+    if org:
+        headers["OpenAI-Organization"] = org
+    if project:
+        headers["OpenAI-Project"] = project
     response = requests.post(url, json=payload, headers=headers, timeout=60)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except req_exc.HTTPError as exc:
+        status = getattr(response, "status_code", None)
+        if status in (401, 403):
+            raise RuntimeError(
+                "API embedding Unauthorized: please set a valid RAG_API_EMBED_API_KEY (or OPENAI_API_KEY), "
+                "or switch rag.embedding_backend to 'vllm'."
+            ) from exc
+        raise
     data = response.json()
     if "data" in data and data["data"]:
         return data["data"][0].get("embedding", [])

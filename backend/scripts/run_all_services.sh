@@ -27,10 +27,10 @@ echo ""
 # 在 SLURM 环境中使用 $SLURM_SUBMIT_DIR，否则使用 ${BASH_SOURCE[0]}
 if [ -n "$SLURM_SUBMIT_DIR" ]; then
     PROJECT_ROOT="$SLURM_SUBMIT_DIR"
-    SCRIPT_DIR="$PROJECT_ROOT/scripts"
+    SCRIPT_DIR="$PROJECT_ROOT/backend/scripts"
 else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+    PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 fi
 
 # 脚本路径

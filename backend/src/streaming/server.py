@@ -335,6 +335,8 @@ def run_server_mode(server_port=5002, server_host='0.0.0.0', rtsp_url=None):
     logger.info("=" * 60)
     logger.info("按 Ctrl+C 停止\n")
     
+    import logging as _logging
+    _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
     socketio.run(app, host=server_host, port=server_port, debug=False, allow_unsafe_werkzeug=True)
 
 

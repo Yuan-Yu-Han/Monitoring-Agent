@@ -4,6 +4,7 @@ import re
 from PIL import Image, ImageDraw, ImageFont
 from openai import OpenAI
 from src.utils.image_utils import is_url, encode_image_to_base64
+from src.utils.openai_compat import clamp_max_tokens, max_tokens_from_context_error
 from prompts.prompt_loader import load_prompt
 from config import load_config
 from langchain.tools import tool
@@ -18,6 +19,7 @@ def detect_image(input_image: str) -> str:
         image_path = input_image
         if is_url(input_image):
             image_path = input_image
+            image_url = image_path
         else:
             image_url = encode_image_to_base64(image_path)
         
@@ -32,12 +34,26 @@ def detect_image(input_image: str) -> str:
         ]
 
         client = OpenAI(api_key=config.vllm_chat.api_key, base_url=config.vllm_chat.base_url)
-        chat_response = client.chat.completions.create(
-            model="Qwen3-VL-8B-Instruct",
-            messages=messages,
-            max_tokens=config.vllm_chat.max_tokens,
-            temperature=config.vllm_chat.temperature,
-        )
+        requested_max_tokens = clamp_max_tokens(getattr(config.vllm_chat, "max_tokens", None), hard_cap=2048)
+        kwargs = {
+            "model": "Qwen3-VL-8B-Instruct",
+            "messages": messages,
+            "temperature": config.vllm_chat.temperature,
+        }
+        if requested_max_tokens is not None:
+            kwargs["max_tokens"] = requested_max_tokens
+
+        try:
+            chat_response = client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            # vLLM/OpenAI-compatible servers may reject max_tokens if it exceeds remaining context.
+            msg = str(exc)
+            allowed = max_tokens_from_context_error(msg)
+            if allowed is None:
+                raise
+            retry_max = clamp_max_tokens(min(allowed, requested_max_tokens or allowed), hard_cap=2048)
+            kwargs["max_tokens"] = retry_max
+            chat_response = client.chat.completions.create(**kwargs)
 
         result = chat_response.choices[0].message.content if hasattr(chat_response, "choices") else str(chat_response)
         return result

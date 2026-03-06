@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from typing import Dict, List
-import traceback
+import logging
 
 from src.rag.doc_loader import load_docs
 from src.rag.pipeline import get_pipeline
+
+logger = logging.getLogger(__name__)
 
 
 def simple_retrieve(query: str, k: int = 3) -> List[Dict[str, str]]:
@@ -26,9 +28,9 @@ def rag_retrieve(query: str, k: int = 3) -> List[Dict[str, str]]:
     try:
         pipeline = get_pipeline()
         return pipeline.retrieve(query, k=k)
-    except Exception:
-        # 打印异常，便于定位检索链路问题
-        traceback.print_exc()
+    except Exception as exc:
+        # 不要把 traceback 打到 stdout（流式接口会把 stdout 当作 tool_output 推给前端）
+        logger.warning("RAG retrieve failed; falling back to simple retrieval: %s", exc, exc_info=True)
         return simple_retrieve(query, k=k)
 
 

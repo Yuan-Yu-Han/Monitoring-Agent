@@ -59,6 +59,9 @@
     "verbose": true,
     "memory_size": 50,
     "enable_tools": true,
+    "enable_memory": false,
+    "retrieval_targets": [],
+    "expose_retrieval_debug": false,
     "tools_enabled": [
       "detect_image",
       "safe_parse_json",
@@ -75,7 +78,8 @@
     "rrf_k": 60,
     "rerank_k": 10,
     "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    "embedding_backend": "api",
+    "enable_vector_memory": false,
+    "embedding_backend": "vllm",
     "api_embed_base_url": "https://api.openai.com/v1",
     "api_embed_model": "text-embedding-3-small"
   },
