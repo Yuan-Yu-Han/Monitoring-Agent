@@ -8,7 +8,7 @@
 # ============================================================
 
 # 创建日志目录和文件，重定向所有输出
-LOG_DIR="./logs/services/startup"
+LOG_DIR="./backend/logs/services/startup"
 mkdir -p "$LOG_DIR"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="$LOG_DIR/run_all_services_$TIMESTAMP.log"

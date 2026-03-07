@@ -16,6 +16,14 @@ export default function StatusCards({ status }: { status: DashboardStatus | null
   const riskColor = risk === "high" ? "var(--red)" : risk === "medium" ? "var(--orange)" : "var(--green)";
   const riskBg   = risk === "high" ? "var(--red-a)" : risk === "medium" ? "var(--orange-a)" : "var(--green-a)";
   const riskLabel = risk === "high" ? "高风险" : risk === "medium" ? "中风险" : "低风险";
+  const targetCount = status?.targetCount ?? status?.personCount ?? 0;
+  const monitorState = (status?.monitorState || "").toLowerCase();
+  const stateLabel =
+    monitorState === "alarm" ? "报警" :
+    monitorState === "suspect" ? "可疑" :
+    monitorState === "idle" ? "空闲" :
+    "未知";
+  const streak = status?.detectionStreak ?? 0;
 
   const cards: Card[] = [
     {
@@ -26,22 +34,22 @@ export default function StatusCards({ status }: { status: DashboardStatus | null
       bg: riskBg,
     },
     {
-      label: "火灾概率",
+      label: "火情置信",
       value: `${status?.fireProbability?.toFixed(1) ?? "0.0"}%`,
       emoji: "🔥",
       color: "var(--orange)",
       bg: "var(--orange-a)",
     },
     {
-      label: "人员检测",
-      value: status?.personCount ?? 0,
-      sub: "人",
-      emoji: "👥",
-      color: "var(--blue)",
-      bg: "var(--blue-a)",
+      label: "当前状态",
+      value: stateLabel,
+      sub: streak > 0 ? `命中×${streak}` : undefined,
+      emoji: "🧭",
+      color: monitorState === "alarm" ? "var(--red)" : monitorState === "suspect" ? "var(--orange)" : "var(--blue)",
+      bg: monitorState === "alarm" ? "var(--red-a)" : monitorState === "suspect" ? "var(--orange-a)" : "var(--blue-a)",
     },
     {
-      label: "未处理告警",
+      label: "近期异常",
       value: status?.unresolvedAlarms ?? 0,
       sub: "条",
       emoji: "🔔",

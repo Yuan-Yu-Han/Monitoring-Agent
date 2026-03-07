@@ -22,10 +22,7 @@ configure_runtime_env()
 
 
 def _embedding_backend(config) -> str:
-    backend = (getattr(config.rag, "embedding_backend", "vllm") or "").strip().lower()
-    if backend in {"vllm", "api"}:
-        return backend
-    return "vllm"
+    return "api"
 
 
 def _persist_path() -> Path:
@@ -40,9 +37,8 @@ def main() -> int:
 
     try:
         from config import config  # noqa: E402
-        from src.rag.doc_loader import DOCS_ROOT, load_docs  # noqa: E402
-        from src.rag.chunking import build_chunks  # noqa: E402
-        from src.rag.retrieve import rag_retrieve  # noqa: E402
+        from src.rag.indexing import DOCS_ROOT, load_docs, build_chunks  # noqa: E402
+        from src.rag.knowledge import rag_retrieve  # noqa: E402
     except Exception as exc:
         print("=== RAG Health Check ===")
         print(f"初始化失败: {exc}")

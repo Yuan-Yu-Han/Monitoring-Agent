@@ -47,7 +47,7 @@ export default function AlarmTable({ alarms }: { alarms: Alarm[] }) {
                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
               >
                 <div className="text-[12px] tabular-nums" style={{ color: "var(--t3)" }}>{a.time}</div>
-                <div className="text-[13px] truncate" style={{ color: "var(--t2)" }}>{a.description || "—"}</div>
+                <div className="text-[13px] leading-snug line-clamp-2" title={a.description || ""} style={{ color: "var(--t2)" }}>{a.description || "—"}</div>
                 <div className="flex items-center">
                   <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
                     style={{ background: sev.bg, color: sev.color }}>

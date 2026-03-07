@@ -54,10 +54,6 @@ export default function RiskTrendChart({ data }: { data: RiskPoint[] }) {
                   <stop offset="5%"  stopColor="#FF9500" stopOpacity={0.2} />
                   <stop offset="95%" stopColor="#FF9500" stopOpacity={0} />
                 </linearGradient>
-                <linearGradient id="gPerson" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#0A84FF" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="#0A84FF" stopOpacity={0} />
-                </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,64,175,0.07)" vertical={false} />
               <XAxis dataKey="time"
@@ -71,8 +67,6 @@ export default function RiskTrendChart({ data }: { data: RiskPoint[] }) {
                 fill="url(#gRisk)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, strokeWidth: 0 }} />
               <Area type="monotone" dataKey="fire" name="火灾概率" stroke="#FF9500"
                 fill="url(#gFire)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, strokeWidth: 0 }} />
-              <Area type="monotone" dataKey="person" name="人员检测" stroke="#0A84FF"
-                fill="url(#gPerson)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, strokeWidth: 0 }} />
             </AreaChart>
           </ResponsiveContainer>
         )}

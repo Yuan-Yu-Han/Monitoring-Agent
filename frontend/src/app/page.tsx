@@ -5,28 +5,31 @@ import { RefreshCw } from "lucide-react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import {
   fetchStatus, fetchAlarms, fetchRiskTrend,
-  type DashboardStatus, type Alarm, type RiskPoint,
+  fetchLatestEvent,
+  type DashboardStatus, type Alarm, type RiskPoint, type LatestEvent,
 } from "@/lib/api";
-import StatusCards    from "@/components/StatusCards";
 import AlarmTable     from "@/components/AlarmTable";
 import RiskTrendChart from "@/components/RiskTrendChart";
 import VideoStream    from "@/components/VideoStream";
+import LatestEventCard from "@/components/LatestEventCard";
 import ChatPanel      from "@/components/ChatPanel";
 
 export default function DashboardPage() {
   const [status,  setStatus]  = useState<DashboardStatus | null>(null);
   const [alarms,  setAlarms]  = useState<Alarm[]>([]);
   const [trend,   setTrend]   = useState<RiskPoint[]>([]);
+  const [latestEvent, setLatestEvent] = useState<LatestEvent | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [refreshing,  setRefreshing]  = useState(false);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [s, a, t] = await Promise.allSettled([fetchStatus(), fetchAlarms(), fetchRiskTrend()]);
+      const [s, a, t, e] = await Promise.allSettled([fetchStatus(), fetchAlarms(), fetchRiskTrend(), fetchLatestEvent()]);
       if (s.status === "fulfilled") setStatus(s.value);
       if (a.status === "fulfilled") setAlarms(a.value.items);
       if (t.status === "fulfilled") setTrend(t.value.items);
+      if (e.status === "fulfilled") setLatestEvent(e.value.event);
       setLastRefresh(new Date());
     } finally { setRefreshing(false); }
   }, []);
@@ -68,7 +71,7 @@ export default function DashboardPage() {
           }}>🔥</div>
           <div>
             <div style={{ fontSize: 15, fontWeight: 800, color: "var(--t1)", letterSpacing: "-0.03em", lineHeight: 1.1 }}>
-              FireGuard AI
+              SafeGuard Fire Assistant
             </div>
             <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1, marginTop: 3, letterSpacing: "0.02em" }}>
               智能消防监控平台
@@ -143,44 +146,45 @@ export default function DashboardPage() {
       <div style={{ flex: 1, minHeight: 0 }}>
         <PanelGroup orientation="vertical" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
 
-          {/* ── Status cards row (resizable) ── */}
-          <Panel defaultSize="64px" minSize="50px" maxSize="220px">
-            <StatusCards status={status} />
-          </Panel>
-
-          <PanelResizeHandle className="resize-handle-h" />
-
           {/* ── Main content ── */}
-          <Panel minSize="400px">
+          <Panel>
             <PanelGroup orientation="horizontal" style={{ height: "100%", display: "flex", gap: 0 }}>
               {/* ── Left column ── */}
-              <Panel defaultSize={54} minSize="360px">
+              <Panel defaultSize={54} minSize={35}>
                 <PanelGroup orientation="vertical" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
                   {/* Video */}
-                  <Panel defaultSize={76} minSize="120px">
+                  <Panel defaultSize={66} minSize="42px">
                     <VideoStream />
                   </Panel>
                   <PanelResizeHandle className="resize-handle-h" />
-                  {/* Bottom row: Risk chart + Alarms side by side */}
-                  <Panel defaultSize={24} minSize="100px">
-                    <PanelGroup orientation="horizontal" style={{ height: "100%", display: "flex" }}>
-                      <Panel defaultSize={55} minSize="180px">
-                        <RiskTrendChart data={trend} />
-                      </Panel>
-                      <PanelResizeHandle className="resize-handle-v" />
-                      <Panel defaultSize={45} minSize="180px">
-                        <AlarmTable alarms={alarms} />
-                      </Panel>
-                    </PanelGroup>
+                  {/* Latest event */}
+                  <Panel defaultSize={34} minSize="42px">
+                    <LatestEventCard event={latestEvent} />
                   </Panel>
                 </PanelGroup>
               </Panel>
 
               <PanelResizeHandle className="resize-handle-v" />
 
-              {/* ── Right column: Chat only ── */}
-              <Panel defaultSize={46} minSize="360px">
-                <ChatPanel />
+              {/* ── Right column: Risk/Alarms (top) + Chat (bottom) ── */}
+              <Panel defaultSize={46} minSize={35}>
+                <PanelGroup orientation="vertical" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+                  <Panel defaultSize={30} minSize="42px">
+                    <PanelGroup orientation="horizontal" style={{ height: "100%", display: "flex" }}>
+                      <Panel defaultSize={55} minSize={25}>
+                        <RiskTrendChart data={trend} />
+                      </Panel>
+                      <PanelResizeHandle className="resize-handle-v" />
+                      <Panel defaultSize={45} minSize={35}>
+                        <AlarmTable alarms={alarms} />
+                      </Panel>
+                    </PanelGroup>
+                  </Panel>
+                  <PanelResizeHandle className="resize-handle-h" />
+                  <Panel defaultSize={70} minSize="42px">
+                    <ChatPanel />
+                  </Panel>
+                </PanelGroup>
               </Panel>
             </PanelGroup>
           </Panel>

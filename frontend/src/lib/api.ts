@@ -4,6 +4,11 @@ export interface DashboardStatus {
   riskLevel: "low" | "medium" | "high";
   fireProbability: number;
   personCount: number;
+  targetCount?: number;
+  monitorState?: string;
+  detectionStreak?: number;
+  noDetectionStreak?: number;
+  lastFilteredCount?: number;
   lastAlarmTime: string;
   unresolvedAlarms: number;
   stream: {
@@ -31,6 +36,20 @@ export interface RiskPoint {
   risk: number;
   fire: number;
   person: number;
+  target?: number;
+}
+
+export interface LatestEvent {
+  event_id: string;
+  timestamp: string;
+  state: string;
+  severity: string;
+  confidence: number;
+  detection_count: number;
+  labels: string[];
+  summary: string;
+  image_path: string;
+  vl_image_path: string;
 }
 
 export async function fetchStatus(): Promise<DashboardStatus> {
@@ -51,19 +70,21 @@ export async function fetchRiskTrend(): Promise<{ items: RiskPoint[] }> {
   return res.json();
 }
 
-export type RetrievalTarget = "event" | "chat" | "knowledge";
+export async function fetchLatestEvent(): Promise<{ ok: boolean; event: LatestEvent | null }> {
+  const res = await fetch(`${BASE}/dashboard/latest-event`, { cache: "no-store" });
+  if (!res.ok) throw new Error("latest-event fetch failed");
+  return res.json();
+}
 
 export async function sendChat(
   query: string,
-  opts?: { enableMemory?: boolean; retrievalTargets?: RetrievalTarget[] },
+  _opts?: { enableMemory?: boolean },
 ): Promise<{ ok: boolean; message: string; severity: string }> {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query,
-      enable_memory: opts?.enableMemory ?? false,
-      retrieval_targets: opts?.retrievalTargets ?? [],
     }),
   });
   if (!res.ok) {

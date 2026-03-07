@@ -51,10 +51,7 @@ def create_config_file():
     if vllm_embed_model:
         config.vllm_embed.model_name = vllm_embed_model
 
-    print("\n🎯 检测配置:")
-    default_strategy = input(f"默认检测策略 (当前: {config.detection.default_strategy}, 留空跳过): ").strip()
-    if default_strategy:
-        config.detection.default_strategy = default_strategy
+    # Detection config has been removed.
 
     print("\n🤖 Agent 配置:")
     agent_name = input(f"Agent 名称 (当前: {config.agent.name}, 留空跳过): ").strip()
@@ -135,7 +132,6 @@ def create_config_file():
     print(f"   RAG Embedding 后端: {config.rag.embedding_backend}")
     print(f"   RAG API Embed 地址: {config.rag.api_embed_base_url}")
     print(f"   RAG API Embed 模型: {config.rag.api_embed_model}")
-    print(f"   默认策略: {config.detection.default_strategy}")
     print(f"   Agent 名称: {config.agent.name}")
     print(f"   详细模式: {config.agent.verbose}")
     return config_file

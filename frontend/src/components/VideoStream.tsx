@@ -16,7 +16,9 @@ export default function VideoStream() {
 
   useEffect(() => {
     const socket = io(STREAM_URL, {
-      transports: ["websocket"],
+      // Allow polling fallback. The bundled Flask-SocketIO server may not support pure WebSocket
+      // when running with the default Werkzeug/threading stack.
+      transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 2000,

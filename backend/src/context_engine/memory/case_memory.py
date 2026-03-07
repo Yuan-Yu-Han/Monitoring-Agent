@@ -5,7 +5,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+")
 
@@ -20,6 +20,88 @@ class CaseRecord:
     detection_count: int
     labels: List[str] = field(default_factory=list)
     summary: str = ""
+    # Optional media pointers (relative to OUTPUTS_DIR, e.g. "alarm/xxx.jpg" or "agent/xxx.jpg")
+    image_path: str = ""
+    vl_image_path: str = ""
+    vl_raw_path: str = ""
+    # Evidence + final verdict (single event record, multiple sources)
+    yolo: Dict[str, Any] = field(default_factory=dict)
+    vl: Dict[str, Any] = field(default_factory=dict)
+    final: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "CaseRecord":
+        """Backward-compatible loader for JSONL records."""
+        raw = raw or {}
+
+        # Legacy top-level fields
+        event_id = str(raw.get("event_id", "") or "")
+        timestamp = str(raw.get("timestamp", "") or "")
+        state = str(raw.get("state", "") or "")
+        severity = str(raw.get("severity", "") or "")
+        confidence = float(raw.get("confidence", 0.0) or 0.0)
+        detection_count = int(raw.get("detection_count", 0) or 0)
+        labels = raw.get("labels") or []
+        if not isinstance(labels, list):
+            labels = []
+        labels = [str(x) for x in labels if str(x).strip()]
+        summary = str(raw.get("summary", "") or "")
+
+        image_path = str(raw.get("image_path", "") or "")
+        vl_image_path = str(raw.get("vl_image_path", "") or "")
+        vl_raw_path = str(raw.get("vl_raw_path", "") or "")
+
+        yolo = raw.get("yolo") if isinstance(raw.get("yolo"), dict) else {}
+        vl = raw.get("vl") if isinstance(raw.get("vl"), dict) else {}
+        final = raw.get("final") if isinstance(raw.get("final"), dict) else {}
+
+        # If nested fields missing, populate from legacy fields for consistency
+        if not yolo:
+            yolo = {
+                "confidence": confidence,
+                "detection_count": detection_count,
+                "labels": labels,
+                "detections": raw.get("detections") if isinstance(raw.get("detections"), list) else [],
+            }
+        if not vl:
+            vl = {
+                "summary": summary,
+                "raw_path": vl_raw_path,
+                "annotated_path": vl_image_path,
+            }
+        if not final:
+            final = {
+                "verdict": "unknown",
+                "reviewed": False,
+                "severity": severity,
+                "confidence": confidence,
+                "reason": "",
+                "decided_by": "yolo",
+            }
+
+        # Normalize: prefer explicit final severity/confidence if present
+        sev2 = str(final.get("severity") or severity)
+        conf2 = float(final.get("confidence") or confidence)
+        sum2 = str(vl.get("summary") or summary)
+        labels2 = vl.get("labels") if isinstance(vl.get("labels"), list) else labels
+        det2 = vl.get("detection_count") if isinstance(vl.get("detection_count"), int) else detection_count
+
+        return cls(
+            event_id=event_id,
+            timestamp=timestamp,
+            state=state,
+            severity=sev2,
+            confidence=conf2,
+            detection_count=int(det2),
+            labels=[str(x) for x in (labels2 or []) if str(x).strip()],
+            summary=sum2,
+            image_path=image_path,
+            vl_image_path=vl_image_path,
+            vl_raw_path=vl_raw_path,
+            yolo=yolo,
+            vl=vl,
+            final=final,
+        )
 
 
 class CaseMemoryStore:
@@ -42,7 +124,8 @@ class CaseMemoryStore:
                 continue
             try:
                 raw = json.loads(line)
-                loaded.append(CaseRecord(**raw))
+                if isinstance(raw, dict):
+                    loaded.append(CaseRecord.from_dict(raw))
             except Exception:
                 continue
         self._records = loaded[-self.max_records :]
@@ -56,6 +139,106 @@ class CaseMemoryStore:
         if len(self._records) > self.max_records:
             self._records = self._records[-self.max_records :]
         self._persist()
+
+    def get(self, event_id: str) -> Optional[CaseRecord]:
+        """Return the latest record for event_id, if any."""
+        if not event_id:
+            return None
+        for rec in reversed(self._records):
+            if rec.event_id == event_id:
+                return rec
+        return None
+
+    def update_summary(self, event_id: str, summary: str) -> bool:
+        for rec in self._records:
+            if rec.event_id == event_id:
+                rec.summary = summary
+                rec.vl["summary"] = summary
+                self._persist()
+                return True
+        return False
+
+    def update_media(
+        self,
+        event_id: str,
+        *,
+        image_path: Optional[str] = None,
+        vl_image_path: Optional[str] = None,
+        vl_raw_path: Optional[str] = None,
+    ) -> bool:
+        for rec in self._records:
+            if rec.event_id != event_id:
+                continue
+            if image_path is not None:
+                rec.image_path = image_path
+            if vl_image_path is not None:
+                rec.vl_image_path = vl_image_path
+            if vl_raw_path is not None:
+                rec.vl_raw_path = vl_raw_path
+                rec.vl["raw_path"] = vl_raw_path
+            self._persist()
+            return True
+        return False
+
+    def update_fields(
+        self,
+        event_id: str,
+        *,
+        detection_count: Optional[int] = None,
+        labels: Optional[List[str]] = None,
+        confidence: Optional[float] = None,
+        severity: Optional[str] = None,
+    ) -> bool:
+        for rec in self._records:
+            if rec.event_id != event_id:
+                continue
+            if detection_count is not None:
+                rec.detection_count = int(detection_count)
+                rec.vl["detection_count"] = int(detection_count)
+            if labels is not None:
+                rec.labels = list(labels)
+                rec.vl["labels"] = list(labels)
+            if confidence is not None:
+                rec.confidence = float(confidence)
+                rec.final["confidence"] = float(confidence)
+            if severity is not None:
+                rec.severity = str(severity)
+                rec.final["severity"] = str(severity)
+            self._persist()
+            return True
+        return False
+
+    def update_final(
+        self,
+        event_id: str,
+        *,
+        verdict: Optional[str] = None,
+        reviewed: Optional[bool] = None,
+        severity: Optional[str] = None,
+        confidence: Optional[float] = None,
+        reason: Optional[str] = None,
+        decided_by: Optional[str] = None,
+    ) -> bool:
+        for rec in self._records:
+            if rec.event_id != event_id:
+                continue
+            if verdict is not None:
+                rec.final["verdict"] = str(verdict)
+            if reviewed is not None:
+                rec.final["reviewed"] = bool(reviewed)
+            if severity is not None:
+                rec.final["severity"] = str(severity)
+                rec.severity = str(severity)
+            if confidence is not None:
+                rec.final["confidence"] = float(confidence)
+                rec.confidence = float(confidence)
+            if reason is not None:
+                rec.final["reason"] = str(reason)
+            if decided_by is not None:
+                rec.final["decided_by"] = str(decided_by)
+            self._persist()
+            return True
+        return False
 
     def search(
         self,

@@ -12,17 +12,15 @@ from langchain.tools import tool
 
 @tool
 def detect_image(input_image: str) -> str:
-    """调用 Qwen-VL 模型检测本地路径的图片，返回 JSON 字符串"""
+    """调用 Qwen-VL 模型检测本地路径的图片，返回 JSON 字符串（含 description 和 objects）"""
     try:
         config = load_config()
-        
-        image_path = input_image
+
         if is_url(input_image):
-            image_path = input_image
-            image_url = image_path
+            image_url = input_image
         else:
-            image_url = encode_image_to_base64(image_path)
-        
+            image_url = encode_image_to_base64(input_image)
+
         messages = [
             {"role": "system", "content": load_prompt("detection_prompt")},
             {
@@ -46,7 +44,6 @@ def detect_image(input_image: str) -> str:
         try:
             chat_response = client.chat.completions.create(**kwargs)
         except Exception as exc:
-            # vLLM/OpenAI-compatible servers may reject max_tokens if it exceeds remaining context.
             msg = str(exc)
             allowed = max_tokens_from_context_error(msg)
             if allowed is None:
@@ -55,85 +52,58 @@ def detect_image(input_image: str) -> str:
             kwargs["max_tokens"] = retry_max
             chat_response = client.chat.completions.create(**kwargs)
 
-        result = chat_response.choices[0].message.content if hasattr(chat_response, "choices") else str(chat_response)
-        return result
-    except Exception as e:
+        return chat_response.choices[0].message.content if hasattr(chat_response, "choices") else str(chat_response)
+    except Exception:
         raise
 
 
-@tool
 def safe_parse_json(raw_result: str) -> list:
-    """安全解析模型输出的 JSON，失败时返回 []"""
+    """从模型输出中提取 objects 检测列表。供内部调用，不作为 Agent 工具暴露。"""
     try:
-        detections = json.loads(raw_result)
-        # 如果返回的是字典，提取其中的列表字段
-        if isinstance(detections, dict):
-            for key in ['objects', 'detections', 'results', 'predictions']:
-                if key in detections and isinstance(detections[key], list):
-                    return detections[key]
-            # 返回字典中的第一个列表
-            for value in detections.values():
+        parsed = json.loads(raw_result)
+        # 新格式：{"description": "...", "objects": [...]}
+        if isinstance(parsed, dict):
+            for key in ["objects", "detections", "results", "predictions"]:
+                if key in parsed and isinstance(parsed[key], list):
+                    return parsed[key]
+            for value in parsed.values():
                 if isinstance(value, list):
                     return value
             return []
-        elif isinstance(detections, list):
-            return detections
-        else:
-            return []
+        # 兼容旧格式：直接返回数组
+        if isinstance(parsed, list):
+            return parsed
+        return []
     except json.JSONDecodeError:
         match = re.search(r"\[.*\]", raw_result, re.DOTALL)
         if match:
             try:
-                detections = json.loads(match.group(0))
-                return detections if isinstance(detections, list) else []
+                parsed = json.loads(match.group(0))
+                return parsed if isinstance(parsed, list) else []
             except json.JSONDecodeError:
                 return []
         return []
 
 
-    except Exception as e:
-        raise
-
-
-@tool
-def safe_parse_json(raw_result: str) -> list:
-    """安全解析模型输出的 JSON，失败时返回 []"""
+def extract_description(raw_result: str) -> str:
+    """从模型输出中提取自然语言场景描述。供内部调用，不作为 Agent 工具暴露。"""
     try:
-        detections = json.loads(raw_result)
-        # 如果返回的是字典，提取其中的列表字段
-        if isinstance(detections, dict):
-            for key in ['objects', 'detections', 'results', 'predictions']:
-                if key in detections and isinstance(detections[key], list):
-                    return detections[key]
-            # 返回字典中的第一个列表
-            for value in detections.values():
-                if isinstance(value, list):
-                    return value
-            return []
-        elif isinstance(detections, list):
-            return detections
-        else:
-            return []
+        parsed = json.loads(raw_result)
+        if isinstance(parsed, dict):
+            return str(parsed.get("description", "")).strip()
+        return ""
     except json.JSONDecodeError:
-        match = re.search(r"\[.*\]", raw_result, re.DOTALL)
+        match = re.search(r'"description"\s*:\s*"((?:[^"\\]|\\.)*)"', raw_result)
         if match:
-            try:
-                detections = json.loads(match.group(0))
-                result = detections if isinstance(detections, list) else []
-                return result
-            except json.JSONDecodeError:
-                return []
-        return []
+            return match.group(1).replace('\\"', '"').replace("\\n", "\n").strip()
+        return ""
 
 
-@tool
 def draw_bboxes(input_image: str, detections: list) -> str:
     """根据检测结果在图片上绘制边界框，返回新图路径"""
     try:
         import time
-        config = load_config()
-        
-        # 类型验证
+
         if isinstance(detections, str):
             try:
                 detections = json.loads(detections)
@@ -142,27 +112,26 @@ def draw_bboxes(input_image: str, detections: list) -> str:
                         if key in detections and isinstance(detections[key], list):
                             detections = detections[key]
                             break
-            except:
+            except Exception:
                 return input_image
-        
+
         if not isinstance(detections, list):
             return input_image
-        
+
         if not os.path.exists(input_image):
             return input_image
-        
+
         try:
             image = Image.open(input_image).convert("RGB")
-        except Exception as e:
+        except Exception:
             return input_image
-        
+
         draw = ImageDraw.Draw(image)
         try:
             font = ImageFont.truetype("NotoSansCJKtc-Regular.otf", 16)
-        except:
+        except Exception:
             font = ImageFont.load_default()
 
-        # 计算缩放比例（处理 0-1 / 0-1000 / 0-1024 等坐标系）
         img_w, img_h = image.size
         max_x = 0
         max_y = 0
@@ -184,58 +153,45 @@ def draw_bboxes(input_image: str, detections: list) -> str:
             elif max_x <= 640 and max_y <= 640:
                 scale_x, scale_y = img_w / 640.0, img_h / 640.0
 
-        # 绘制边界框
-        drawn_count = 0
-        for i, obj in enumerate(detections):
+        for obj in detections:
             try:
-                if not isinstance(obj, dict):
+                if not isinstance(obj, dict) or "bbox_2d" not in obj:
                     continue
-                if "bbox_2d" not in obj:
-                    continue
-                
                 bbox = obj["bbox_2d"]
                 if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
                     continue
-                
-                # 转换坐标为整数元组，PIL.rectangle 需要 ((x1, y1), (x2, y2)) 格式
-                x1 = int(bbox[0] * scale_x)
-                y1 = int(bbox[1] * scale_y)
-                x2 = int(bbox[2] * scale_x)
-                y2 = int(bbox[3] * scale_y)
 
-                # 边界夹紧
-                x1 = max(0, min(x1, img_w - 1))
-                y1 = max(0, min(y1, img_h - 1))
-                x2 = max(0, min(x2, img_w - 1))
-                y2 = max(0, min(y2, img_h - 1))
-                
+                x1 = max(0, min(int(bbox[0] * scale_x), img_w - 1))
+                y1 = max(0, min(int(bbox[1] * scale_y), img_h - 1))
+                x2 = max(0, min(int(bbox[2] * scale_x), img_w - 1))
+                y2 = max(0, min(int(bbox[3] * scale_y), img_h - 1))
+
                 label = obj.get("label", "")
                 sub_label = obj.get("sub_label", "")
-                
-                # 使用正确的坐标格式：((x1, y1), (x2, y2))
+
                 draw.rectangle(((x1, y1), (x2, y2)), outline="red", width=3)
-                
-                # 文字位置：在矩形上方，保证不超出图片边界
                 text_y = max(0, y1 - 20)
                 draw.text((x1 + 2, text_y), f"{label} | {sub_label}", fill="yellow", font=font)
-                
-                drawn_count += 1
-            except Exception as e:
+            except Exception:
                 continue
 
-        # 保存到 outputs/agent 文件夹
-        output_dir = "./outputs/agent"
+        output_dir = "./outputs/vl/annotated"
         os.makedirs(output_dir, exist_ok=True)
-        
-        # 使用时间戳和原文件名生成唯一的输出文件名
-        import time
+
         base_name = os.path.splitext(os.path.basename(input_image))[0]
         ext = os.path.splitext(input_image)[1]
-        timestamp = int(time.time() * 1000)  # 毫秒级时间戳
+        timestamp = int(time.time() * 1000)
         output_path = os.path.join(output_dir, f"{base_name}_detected_{timestamp}{ext}")
 
-        image.save(output_path)
+        try:
+            if ext.lower() in (".jpg", ".jpeg"):
+                image.save(output_path, quality=95, subsampling=0, optimize=True)
+            else:
+                image.save(output_path)
+        except Exception:
+            # Fallback without extra parameters
+            image.save(output_path)
         return output_path
-    
-    except Exception as e:
+
+    except Exception:
         raise

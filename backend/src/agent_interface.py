@@ -4,7 +4,6 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
-import numpy as np
 from enum import Enum
 from pathlib import Path
 import re
@@ -16,13 +15,10 @@ from src.utils.runtime_env import configure_runtime_env
 configure_runtime_env()
 
 from config import load_config
-from src.system.event_trigger import DetectionEvent, MonitorState
-from src.utils.image_utils import encode_numpy_to_base64
 from src.hybrid_monitoring_agent import build_hybrid_agent
 from src.context_engine.memory.case_memory import CaseMemoryStore, CaseRecord, extract_labels
 from src.context_engine.memory.vector_memory import VectorMemoryStore
 from src.context_engine.orchestrator import build_context_bundle
-from src.context_engine.retrievers import build_event_query
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +127,7 @@ class AgentInterface:
             if enable_memory is None
             else bool(enable_memory)
         )
+        self.default_use_llm_router = bool(getattr(cfg_agent, "use_llm_router", False))
 
         cfg_targets = getattr(cfg_agent, "retrieval_targets", None)
         if isinstance(cfg_targets, list):
@@ -161,13 +158,7 @@ class AgentInterface:
         self.last_interrupt = None
         self.last_config = None
         self._stream_queue = None  # set during handle_user_query_stream
-
-        # 事件上下文缓存（用于丰富提示词）
-        self.last_events: List[DetectionEvent] = []
-        self.max_event_history = 5
-
-        # 事件计数器，用于生成唯一的thread_id
-        self.event_counter = 0
+        self._pending_image_paths: list = []  # annotated images found in tool outputs
 
         # 案例记忆库（持久化到 cache 目录）
         case_store_path = Path(self.config.cache_dir) / "event_cases.jsonl"
@@ -182,85 +173,7 @@ class AgentInterface:
             except Exception as exc:
                 logger.warning(f"向量记忆初始化失败，将仅使用JSONL记忆: {exc}")
     
-    def process(self, input_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
-        """统一入口：处理输入数据并分发到对应路径。"""
-        input_type = input_data.get("type", "query")
-        
-        if input_type == "event":
-            event = input_data.get("event")
-            if event is None:
-                return AgentResponse(
-                    success=False,
-                    message="错误：event 类型输入缺少 'event' 字段",
-                    severity="error"
-                )
-            return self.handle_event(event)
-        
-        elif input_type == "query":
-            query = input_data.get("query", "")
-            image = input_data.get("image")
-            return self.handle_user_query(query, context, image)
-        
-        else:
-            return AgentResponse(
-                success=False,
-                message=f"未知的输入类型: {input_type}",
-                severity="error"
-            )
-    
-    def handle_event(self, event: DetectionEvent, tool_args: Optional[Dict[str, Any]] = None) -> AgentResponse:
-        """事件驱动入口，用于监控事件触发处理。支持 tool_args 传递给 Agent 工具。"""
-        try:
-            logger.info(f"Agent 处理事件: {event.state.value}")
-            # 保存事件到历史
-            self.last_events.append(event)
-            if len(self.last_events) > self.max_event_history:
-                self.last_events = self.last_events[-self.max_event_history:]
-            # 构建提示词（融合事件上下文 + 对话历史）
-            prompt = self._build_event_prompt(event)
-
-            # 使用唯一的thread_id，避免历史累积导致上下文超限
-            self.event_counter += 1
-            thread_id = f"event_{self.event_counter}"
-
-            # 合并 tool_args 到 config['configurable']
-            config = {"configurable": {"thread_id": thread_id}}
-            if tool_args:
-                config["configurable"].update(tool_args)
-            # 调用 Agent
-            response = self._invoke_agent(
-                prompt,
-                config=config,
-                stream=True
-            )
-            # 添加到对话记忆
-            if self.enable_memory:
-                self.conversation_memory.add_message(
-                    MessageRole.USER,
-                    f"[事件触发] {event.state.value}",
-                    metadata=event.to_dict()
-                )
-                self.conversation_memory.add_message(
-                    MessageRole.ASSISTANT,
-                    response
-                )
-            # 解析 Agent 响应并评估严重性
-            agent_response = self._parse_agent_response(response, event)
-            self._remember_event_case(event, agent_response)
-            logger.info(
-                f"Agent 响应: severity={agent_response.severity}, "
-                f"escalate={agent_response.should_escalate}"
-            )
-            return agent_response
-        except Exception as e:
-            logger.error(f"Agent 处理事件失败: {e}", exc_info=True)
-            return AgentResponse(
-                success=False,
-                message=f"Agent 处理失败: {str(e)}",
-                severity="error"
-            )
-    
-    def handle_user_query(self, query: str, context: Optional[Dict[str, Any]] = None, image: Optional[np.ndarray] = None) -> AgentResponse:
+    def handle_user_query(self, query: str, context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         """用户驱动入口，用于处理用户查询。"""
         try:
             logger.info(f"Agent 处理用户查询: {query}")
@@ -274,7 +187,7 @@ class AgentInterface:
                     "我可以进行火情风险研判、监控事件分析、历史案例对比，并给出处置建议。"
                 )
                 if enable_conversation_memory:
-                    self.conversation_memory.add_message(MessageRole.USER, query, metadata={"image": image is not None})
+                    self.conversation_memory.add_message(MessageRole.USER, query)
                     self.conversation_memory.add_message(MessageRole.ASSISTANT, fast_reply)
                 return AgentResponse(success=True, message=fast_reply, severity="info")
             
@@ -329,6 +242,7 @@ class AgentInterface:
         import sys
 
         self._stream_queue = event_queue
+        self._pending_image_paths = []
 
         # Redirect stdout so tool print() output is captured as 'tool_output' events
         original_stdout = sys.stdout
@@ -344,104 +258,34 @@ class AgentInterface:
         sys.stdout = ToolCapture()
         try:
             resp = self.handle_user_query(query, context)
-            event_queue.put({"type": "done", "message": resp.message, "severity": resp.severity})
+            done_event: dict = {"type": "done", "message": resp.message, "severity": resp.severity}
+            if self._pending_image_paths:
+                done_event["image_paths"] = list(self._pending_image_paths)
+            event_queue.put(done_event)
         except Exception as exc:
             event_queue.put({"type": "error", "message": str(exc)})
         finally:
             sys.stdout = original_stdout
             self._stream_queue = None
+            self._pending_image_paths = []
 
     def _is_greeting_or_intro(self, query: str) -> bool:
         q = query.strip().lower()
         if not q:
             return False
-        # 纯寒暄/身份询问才走快速路径，含任务关键词的不触发
-        task_keywords = ["检测", "分析", "查询", "告警", "图片", "视频", "fire", "smoke", "detect", "报告", "风险", "帮我", "帮忙"]
+        # 含任务/历史/事件关键词的，一律走正常路径
+        task_keywords = [
+            "检测", "分析", "查询", "告警", "图片", "视频", "fire", "smoke", "detect",
+            "报告", "风险", "帮我", "帮忙",
+            "历史", "记录", "记忆", "过去", "发生", "事件", "案例", "最近", "之前",
+            "能否", "可以", "能不能", "有没有", "统计", "搜索", "回溯",
+        ]
         if any(kw in q for kw in task_keywords):
             return False
         pure_greetings = {"你好", "您好", "hi", "hello", "你是谁", "介绍下你自己", "自我介绍", "hey"}
         if q in pure_greetings:
             return True
         return False
-    
-    def _build_event_prompt(self, event: DetectionEvent) -> str:
-        """构建事件分析提示词（精简版，避免上下文超限）。"""
-        state_desc = {
-            MonitorState.SUSPECT: "检测到可疑情况",
-            MonitorState.ALARM: "检测到异常事件",
-            MonitorState.IDLE: "恢复正常"
-        }
-
-        detection_info = "\n".join([
-            f"- {det.get('class', '未知')} (置信度: {det.get('confidence', 0):.2f})"
-            for det in event.detections
-        ])
-
-        prompt_parts = []
-
-        # 添加当前事件信息（精简版）
-        prompt_parts.append("===== 监控事件 =====")
-        prompt_parts.append(f"状态: {state_desc.get(event.state, event.state.value)}")
-        prompt_parts.append(f"时间: {event.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-
-        # 添加 event_id（关键！让Agent知道如何找到图片）
-        event_id = getattr(event, 'event_id', None)
-        if event_id:
-            prompt_parts.append(f"事件ID: {event_id}")
-
-        prompt_parts.append(f"检测目标: {detection_info if detection_info else '无'}")
-
-        # Layer 1+2: 先做意图识别，再按计划检索 event/chat/knowledge
-        retrieval_query = build_event_query(event)
-        targets = list(self.default_retrieval_targets or [])
-        enable_retrieval = bool(targets)
-        enable_event_mem = "event" in targets
-        enable_chat_mem = "chat" in targets
-        enable_knowledge = "knowledge" in targets
-
-        if enable_retrieval:
-            bundle = build_context_bundle(
-                query=retrieval_query,
-                context_kind="event",
-                case_memory=self.case_memory,
-                vector_memory=self.vector_memory,
-                labels=extract_labels(event.detections),
-                top_k=3,
-                use_llm_router=True,
-                enable_event_memory=enable_event_mem,
-                enable_chat_memory=enable_chat_mem,
-                enable_knowledge_memory=enable_knowledge,
-            )
-
-            if (self.config.debug or self.expose_retrieval_debug):
-                prompt_parts.append(f"\n===== 检索路由（调试） =====")
-                prompt_parts.append(
-                    f"use_event_memory={bundle.plan.use_event_memory}, "
-                    f"use_chat_memory={bundle.plan.use_chat_memory}, "
-                    f"use_knowledge_memory={bundle.plan.use_knowledge_memory}, "
-                    f"days={bundle.plan.days if bundle.plan.days else '-'}, "
-                    f"reason={bundle.plan.reason}"
-                )
-
-            if enable_event_mem and bundle.event_memory:
-                prompt_parts.append("\n===== 相关事件记录（参考） =====")
-                prompt_parts.append(bundle.event_memory)
-            if enable_chat_mem and bundle.chat_memory:
-                prompt_parts.append("\n===== 相关对话记录（参考） =====")
-                prompt_parts.append(bundle.chat_memory)
-            if enable_knowledge and bundle.knowledge_memory:
-                prompt_parts.append("\n===== 相关知识片段（参考） =====")
-                prompt_parts.append(bundle.knowledge_memory)
-
-        prompt_parts.append("\n===== 任务 =====")
-        if event_id:
-            prompt_parts.append(f"1. 使用 find_image 工具并传入 event_id='{event_id}' 来查找事件图片")
-            prompt_parts.append("2. 使用 detect_image 工具分析图片内容")
-            prompt_parts.append("3. 结合相似案例与RAG知识，给出简洁的风险评估和处置建议")
-        else:
-            prompt_parts.append("请分析当前情况并给出简洁评估。")
-
-        return "\n".join(prompt_parts)
     
     def _build_user_prompt(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
         """构建用户查询提示词，融合对话与事件上下文。"""
@@ -456,16 +300,6 @@ class AgentInterface:
                 prompt_parts.append("===== 对话上下文 =====")
                 prompt_parts.append(history)
                 prompt_parts.append("")
-        
-        # 添加最近的监控事件（只取最近 1 条）
-        if self.last_events:
-            prompt_parts.append("===== 最近监控事件 =====")
-            for i, evt in enumerate(self.last_events[-1:], 1):
-                prompt_parts.append(
-                    f"{i}. [{evt.timestamp.strftime('%H:%M:%S')}] "
-                    f"状态: {evt.state.value}, 检测: {len(evt.detections)} 个目标"
-                )
-            prompt_parts.append("")
         
         # 添加用户查询
         prompt_parts.append("===== 用户问题 =====")
@@ -488,7 +322,13 @@ class AgentInterface:
                     legacy.append("chat")
                 if ctx.get("enable_knowledge_memory") is True:
                     legacy.append("knowledge")
-                req_targets = legacy if legacy else self.default_retrieval_targets
+                if legacy:
+                    req_targets = legacy
+                elif self.default_retrieval_targets:
+                    req_targets = self.default_retrieval_targets
+                else:
+                    # If the client doesn't specify retrieval toggles, default to allowing routing across all sources.
+                    req_targets = ["event", "chat", "knowledge"]
 
         if not isinstance(req_targets, list):
             req_targets = []
@@ -511,7 +351,7 @@ class AgentInterface:
                 vector_memory=self.vector_memory,
                 labels=None,
                 top_k=3,
-                use_llm_router=True,
+                use_llm_router=bool(ctx.get("use_llm_router", self.default_use_llm_router)),
                 enable_event_memory=enable_event_mem,
                 enable_chat_memory=enable_chat_mem,
                 enable_knowledge_memory=enable_knowledge,
@@ -543,27 +383,6 @@ class AgentInterface:
         
         return "\n".join(prompt_parts)
 
-    def _remember_event_case(self, event: DetectionEvent, response: AgentResponse) -> None:
-        """将事件及结论保存到案例记忆库。"""
-        try:
-            event_id = getattr(event, "event_id", "") or f"event_{event.timestamp.strftime('%Y%m%d_%H%M%S')}"
-            summary = " ".join(response.message.strip().split())[:240]
-            record = CaseRecord(
-                event_id=event_id,
-                timestamp=event.timestamp.isoformat(),
-                state=event.state.value,
-                severity=response.severity,
-                confidence=float(event.confidence or 0.0),
-                detection_count=len(event.detections or []),
-                labels=extract_labels(event.detections),
-                summary=summary,
-            )
-            self.case_memory.add(record)
-            if self.vector_memory is not None:
-                self.vector_memory.add(record, memory_type="event")
-        except Exception as exc:
-            logger.warning(f"写入案例记忆失败，已忽略: {exc}")
-
     def _remember_user_case(
         self,
         query: str,
@@ -578,8 +397,6 @@ class AgentInterface:
             message_count = (context or {}).get("message_count", 0)
             event_id = f"{session_id}_{message_count or now.strftime('%Y%m%d_%H%M%S')}"
             latest_labels: List[str] = []
-            if self.last_events:
-                latest_labels = extract_labels(self.last_events[-1].detections)
 
             summary = " ".join(
                 f"Q: {query.strip()} A: {response_text.strip()}".split()
@@ -667,6 +484,21 @@ class AgentInterface:
                                     self._stream_queue.put({"type": "tool_output", "content": tool_out})
                                 else:
                                     print(tool_out, flush=True)
+                                # Extract annotated image path from skill JSON output
+                                try:
+                                    import json as _json
+                                    parsed_out = _json.loads(tool_out)
+                                    if isinstance(parsed_out, dict):
+                                        # Prefer annotated_path (with bboxes); only use image_path if it's in outputs/
+                                        val = parsed_out.get("annotated_path")
+                                        if not val:
+                                            raw_img = parsed_out.get("image_path", "")
+                                            if raw_img and "outputs" in str(raw_img):
+                                                val = raw_img
+                                        if val and isinstance(val, str) and val not in self._pending_image_paths:
+                                            self._pending_image_paths.append(val)
+                                except Exception:
+                                    pass
                         else:
                             # ── Final complete AIMessage (LangGraph emits one at end) ──
                             # Use it as fallback if no tokens were streamed (e.g. streaming not supported by LLM)
@@ -757,31 +589,6 @@ class AgentInterface:
         self.last_interrupt = None
         return result_text or ""
     
-    def _encode_image(self, frame: np.ndarray) -> str:
-        """将图像编码为 Base64，供视觉模型使用。"""
-        try:
-            return encode_numpy_to_base64(frame)
-        except Exception as e:
-            logger.error(f"图像编码失败: {e}")
-            return ""
-    
-    def _parse_agent_response(self, response: str, event: DetectionEvent) -> AgentResponse:
-        """解析 Agent 响应并评估严重性，返回结构化结果。"""
-        severity = self._parse_severity_from_response(response)
-        should_escalate = severity == "critical" or (severity == "warning" and event.state == MonitorState.ALARM)
-        
-        return AgentResponse(
-            success=True,
-            message=response,
-            severity=severity,
-            should_escalate=should_escalate,
-            metadata={
-                "event_state": event.state.value,
-                "detection_count": len(event.detections),
-                "confidence": event.confidence
-            }
-        )
-    
     def _parse_severity_from_response(self, response: str) -> str:
         """从 Agent 回复中解析严重程度等级。"""
         response_lower = response.lower()
@@ -808,6 +615,3 @@ class AgentInterface:
         """清空对话记忆并重置上下文。"""
         self.conversation_memory.clear()
     
-    def clear_events(self) -> None:
-        """清空事件历史缓存。"""
-        self.last_events.clear()

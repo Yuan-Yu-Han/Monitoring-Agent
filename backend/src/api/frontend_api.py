@@ -16,8 +16,8 @@ from typing import Any, Dict, List
 
 import httpx
 import logging
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -28,8 +28,11 @@ from src.context_engine.memory.case_memory import CaseMemoryStore
 STREAM_SERVER_URL = os.getenv("STREAM_SERVER_URL", "http://127.0.0.1:5002").rstrip("/")
 CACHE_DIR = Path(os.getenv("CACHE_DIR", "./cache"))
 CASE_STORE_PATH = CACHE_DIR / "event_cases.jsonl"
+OUTPUTS_DIR = Path(os.getenv("OUTPUTS_DIR", "./outputs")).resolve()
+MONITOR_STATUS_PATH = CACHE_DIR / "monitor_status.json"
+RISK_SAMPLES_PATH = CACHE_DIR / "risk_samples.jsonl"
 
-app = FastAPI(title="FireGuard AI Monitor API")
+app = FastAPI(title="SafeGuard Fire Assistant API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -74,18 +77,39 @@ def health():
     return {"ok": True, "time": datetime.now().isoformat()}
 
 
+@app.get("/outputs/{path:path}")
+def serve_output_image(path: str):
+    """Serve generated images (annotated frames, captures, etc.)"""
+    file_path = (OUTPUTS_DIR / path).resolve()
+    # Security: ensure the resolved path is still inside OUTPUTS_DIR
+    if not str(file_path).startswith(str(OUTPUTS_DIR)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(str(file_path))
+
+
 @app.get("/dashboard/status")
 def dashboard_status():
     stream_status = _safe_get_stream_status()
-    records = _load_records()
+    records = [r for r in _load_records() if str(r.get("state", "")) != "chat"]
+    monitor = _load_monitor_status()
 
-    person_count = sum(max(int(rec.get("detection_count", 0)), 0) for rec in records[-8:])
+    # detection_count is the number of filtered detections per stored event record.
+    # Keep legacy field name "personCount" for UI compatibility, but it does not mean "persons".
+    target_count = sum(max(int(rec.get("detection_count", 0)), 0) for rec in records[-8:])
     fire_probability = max(
-        (float(rec.get("confidence", 0.0)) for rec in records[-8:]), default=0.0
+        (
+            float((rec.get("final") or {}).get("confidence", rec.get("confidence", 0.0)) or 0.0)
+            for rec in records[-8:]
+            if str((rec.get("final") or {}).get("verdict", "fire")) != "non_fire"
+        ),
+        default=0.0,
     ) * 100.0
     unresolved = sum(
         1 for rec in records[-20:]
-        if str(rec.get("severity", "info")).lower() in ("critical", "warning")
+        if str((rec.get("final") or {}).get("severity", rec.get("severity", "info"))).lower() in ("critical", "warning")
+        and str((rec.get("final") or {}).get("verdict", "fire")) != "non_fire"
     )
     risk_level = "low"
     if unresolved >= 5 or fire_probability >= 70:
@@ -96,19 +120,55 @@ def dashboard_status():
     last_alarm_time = "-"
     if records:
         try:
+            from datetime import timezone, timedelta
+
+            _cst = timezone(timedelta(hours=8))
             ts = datetime.fromisoformat(records[-1]["timestamp"])
-            last_alarm_time = ts.strftime("%H:%M:%S")
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            last_alarm_time = ts.astimezone(_cst).strftime("%H:%M:%S")
         except Exception:
             pass
 
     return {
         "riskLevel": risk_level,
         "fireProbability": round(fire_probability, 1),
-        "personCount": person_count,
+        "personCount": target_count,   # legacy
+        "targetCount": target_count,   # preferred
+        "monitorState": str(monitor.get("state") or ""),
+        "detectionStreak": int(monitor.get("detection_streak") or 0),
+        "noDetectionStreak": int(monitor.get("no_detection_streak") or 0),
+        "lastFilteredCount": int(monitor.get("last_filtered_count") or 0),
         "lastAlarmTime": last_alarm_time,
         "unresolvedAlarms": unresolved,
         "stream": stream_status,
     }
+
+
+@app.get("/dashboard/latest-event")
+def dashboard_latest_event():
+    records = [r for r in _load_records() if str(r.get("state", "")) != "chat"]
+    if not records:
+        return {"ok": True, "event": None}
+
+    rec = records[-1]
+    fin = rec.get("final") if isinstance(rec.get("final"), dict) else {}
+    event = {
+        "event_id": rec.get("event_id", ""),
+        "timestamp": rec.get("timestamp", ""),
+        "state": rec.get("state", ""),
+        "severity": fin.get("severity", rec.get("severity", "")),
+        "confidence": fin.get("confidence", rec.get("confidence", 0.0)),
+        "detection_count": rec.get("detection_count", 0),
+        "labels": rec.get("labels", []),
+        "summary": rec.get("summary", ""),
+        "image_path": str(rec.get("image_path") or "").strip(),
+        "vl_image_path": str(rec.get("vl_image_path") or "").strip(),
+        "vl_raw_path": str(rec.get("vl_raw_path") or "").strip(),
+        "verdict": fin.get("verdict", "unknown"),
+        "reviewed": bool(fin.get("reviewed", False)),
+    }
+    return {"ok": True, "event": event}
 
 
 @app.get("/dashboard/alarms")
@@ -117,13 +177,22 @@ def dashboard_alarms():
     latest = records[-30:][::-1]
     alarms = []
     for idx, rec in enumerate(latest, 1):
+        fin = rec.get("final") if isinstance(rec.get("final"), dict) else {}
         ts = rec.get("timestamp", "")
         time_str = ts
         try:
-            time_str = datetime.fromisoformat(ts).strftime("%H:%M:%S")
+            from datetime import timezone, timedelta
+
+            _cst = timezone(timedelta(hours=8))
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            time_str = dt.astimezone(_cst).strftime("%H:%M:%S")
         except Exception:
             pass
-        severity = str(rec.get("severity", "info")).lower()
+        if str(fin.get("verdict", "fire")) == "non_fire":
+            continue
+        severity = str(fin.get("severity", rec.get("severity", "info"))).lower()
         alarms.append(
             {
                 "id": rec.get("event_id") or f"ALM-{idx:03d}",
@@ -134,7 +203,7 @@ def dashboard_alarms():
                     else ("warning" if severity in ("warning", "warn") else "info")
                 ),
                 "location": "监控区域",
-                "description": rec.get("summary", ""),
+                "description": (rec.get("summary", "") or fin.get("reason", "")),
                 "status": "processing" if severity in ("critical", "warning", "warn") else "resolved",
             }
         )
@@ -144,12 +213,55 @@ def dashboard_alarms():
 @app.get("/dashboard/risk-trend")
 def dashboard_risk_trend():
     records = [r for r in _load_records() if str(r.get("state", "")) != "chat"]
+    samples = _load_risk_samples()
+    if samples:
+        buckets: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: {"risk": 0.0, "fire": 0.0, "target": 0.0, "count": 0.0}
+        )
+        for rec in samples[-480:]:  # 24h @ 3min ~= 480 points
+            try:
+                from datetime import timezone, timedelta
+
+                _cst = timezone(timedelta(hours=8))
+                ts = datetime.fromisoformat(str(rec.get("timestamp", "")))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.astimezone(_cst)
+                # 3-minute bucket
+                minute = (ts.minute // 3) * 3
+                key = ts.replace(minute=minute, second=0, microsecond=0).strftime("%H:%M")
+            except Exception:
+                continue
+            buckets[key]["risk"] += float(rec.get("risk", 0.0))
+            buckets[key]["fire"] += float(rec.get("fire", 0.0))
+            buckets[key]["target"] += float(rec.get("target", 0.0))
+            buckets[key]["count"] += 1.0
+
+        result = []
+        for k in sorted(buckets.keys()):
+            b = buckets[k]
+            c = max(b["count"], 1.0)
+            result.append(
+                {
+                    "time": k,
+                    "risk": round(b["risk"] / c, 1),
+                    "fire": round(b["fire"] / c, 1),
+                    "person": round(b["target"] / c, 1),  # legacy
+                    "target": round(b["target"] / c, 1),
+                }
+            )
+        return {"items": result[-480:]}
+
     buckets: Dict[str, Dict[str, float]] = defaultdict(
         lambda: {"risk": 0.0, "fire": 0.0, "person": 0.0, "count": 0.0}
     )
     for rec in records[-240:]:
         try:
+            from datetime import timezone, timedelta
+            _cst = timezone(timedelta(hours=8))
             ts = datetime.fromisoformat(rec["timestamp"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc).astimezone(_cst)
             hour = ts.strftime("%H:00")
         except Exception:
             continue
@@ -173,6 +285,7 @@ def dashboard_risk_trend():
                 "risk": round(b["risk"] / c, 1),
                 "fire": round(b["fire"] / c, 1),
                 "person": round(b["person"] / c, 1),
+                "target": round(b["person"] / c, 1),  # preferred; "person" is legacy
             }
         )
     return {"items": result[-24:]}
@@ -180,7 +293,6 @@ def dashboard_risk_trend():
 
 @app.post("/chat")
 async def chat(body: ChatRequest):
-    from fastapi import HTTPException
     query = body.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
@@ -220,7 +332,6 @@ async def chat(body: ChatRequest):
 
 @app.post("/chat/stream")
 async def chat_stream(body: ChatRequest):
-    from fastapi import HTTPException
     query = body.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
@@ -287,7 +398,6 @@ def _proxy_stream_action(action: str):
         r = httpx.post(f"{STREAM_SERVER_URL}/{action}", timeout=5)
         return {"ok": r.status_code < 400, "upstream": r.json() if r.content else {}}
     except Exception as exc:
-        from fastapi import HTTPException
         raise HTTPException(status_code=502, detail=str(exc))
 
 
@@ -319,6 +429,32 @@ def _load_records() -> List[Dict[str, Any]]:
             rows.append(json.loads(line))
         except Exception:
             continue
+    return rows
+
+
+def _load_monitor_status() -> Dict[str, Any]:
+    try:
+        if MONITOR_STATUS_PATH.exists():
+            return json.loads(MONITOR_STATUS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _load_risk_samples(limit: int = 6000) -> List[Dict[str, Any]]:
+    if not RISK_SAMPLES_PATH.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        for line in RISK_SAMPLES_PATH.read_text(encoding="utf-8").splitlines()[-limit:]:
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+    except Exception:
+        return []
     return rows
 
 

@@ -11,11 +11,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.tools.skills import (
+from src.skills import (
     analyze_monitoring_event,
     quick_detect,
     batch_analyze,
-    compare_events
+    compare_events,
 )
 
 

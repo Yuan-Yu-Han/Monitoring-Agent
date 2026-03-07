@@ -3,12 +3,16 @@ import json
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, List
 from pathlib import Path
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional in some runtime
+    load_dotenv = None
 
 # 加载 .env 文件
 env_path = Path(__file__).parent / ".env" # .env 文件与 config.py 在同一目录
 # 这里必须 override=True：否则若进程环境里已有同名变量（可能是旧值/空值），.env 不会生效，导致鉴权 401 等问题
-load_dotenv(dotenv_path=env_path, override=True)
+if load_dotenv is not None:
+    load_dotenv(dotenv_path=env_path, override=True)
 
 
 @dataclass
@@ -40,14 +44,6 @@ class VLLMEmbedConfig:
 
 
 @dataclass
-class DetectionConfig:
-    default_strategy: str = "local_yolo"
-    fallback_enabled: bool = True
-    auto_fallback: bool = True
-    max_concurrent: int = 5
-
-
-@dataclass
 class AgentConfig:
     name: str = "HybridMonitoringAgent"
     max_steps: int = 100
@@ -60,6 +56,7 @@ class AgentConfig:
     enable_memory: bool = False
     retrieval_targets: List[str] = field(default_factory=list)
     expose_retrieval_debug: bool = False  # include routing/debug blocks in prompt
+    use_llm_router: bool = False  # intent routing via LLM (fallback to rules on failure)
     tools_enabled: List[str] = field(default_factory=lambda: [
         "detect_image",
         "safe_parse_json",
@@ -85,6 +82,10 @@ class RAGConfig:
     rerank_k: int = 10
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     enable_vector_memory: bool = False  # True = 开启向量记忆/RAG检索
+    # Knowledge base retriever backend:
+    # - "chroma": our simple dense-only retriever in src.rag.chroma_store
+    # - "llamaindex": LlamaIndex retriever backed by Chroma
+    knowledge_retriever: str = "chroma"
     embedding_backend: str = "vllm"  # vllm | api
     api_embed_base_url: str = "https://api.openai.com/v1"
     api_embed_model: str = "text-embedding-3-small"
@@ -93,7 +94,7 @@ class RAGConfig:
 @dataclass
 class MonitoringConfig:
     rtsp_url: str = "rtsp://127.0.0.1:8554/mystream"
-    rtsp_fps: int = 5
+    rtsp_fps: float = 5.0
     rtsp_connect_timeout: int = 10
 
     yolo_model: str = "yolov8n.pt"
@@ -103,12 +104,27 @@ class MonitoringConfig:
     suspect_threshold: int = 2
     alarm_threshold: int = 5
     idle_threshold: int = 10
-    target_classes: List[str] = field(default_factory=lambda: ["fire", "smoke", "person"])
+    target_classes: List[str] = field(default_factory=lambda: ["fire", "smoke"])
 
     save_event_frames: bool = True
     save_detection_frames: bool = False
     output_dir: str = "./outputs/alarm"
     detection_save_interval: int = 30
+    # Output retention (0 = unlimited)
+    max_event_images: int = 2000
+    max_detection_images: int = 800
+    max_agent_images: int = 2000
+    max_vl_raw_files: int = 4000
+    max_yolo_raw_files: int = 4000
+    prune_interval_seconds: int = 60
+
+    # Persistence controls (reduce JSONL size)
+    persist_yolo_detections: bool = False  # store full bbox list inside JSONL
+    persist_yolo_raw: bool = False         # store full YOLO detections to outputs/yolo/raw/{event_id}.json
+
+    # VL-based detection mode (no YOLO required)
+    use_vl_detection: bool = False
+    vl_detection_interval: int = 30  # seconds between VL inference calls
 
     enable_signal_handling: bool = True
     log_interval: int = 30
@@ -119,7 +135,6 @@ class GlobalConfig:
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     vllm_chat: VLLMChatConfig = field(default_factory=VLLMChatConfig)
     vllm_embed: VLLMEmbedConfig = field(default_factory=VLLMEmbedConfig)
-    detection: DetectionConfig = field(default_factory=DetectionConfig)
     io: IOConfig = field(default_factory=IOConfig)  # 添加 IOConfig
     agent: AgentConfig = field(default_factory=AgentConfig)
     rag: RAGConfig = field(default_factory=RAGConfig)
@@ -180,11 +195,6 @@ class GlobalConfig:
             if not rag_api_key and not openai_key:
                 result["warnings"].append("RAG API embedding 密钥未设置（RAG_API_EMBED_API_KEY/OPENAI_API_KEY）")
 
-        valid_strategies = ["local_yolo", "qwen_vl", "online_api"]
-        if self.detection.default_strategy not in valid_strategies:
-            result["errors"].append(f"无效的默认检测策略: {self.detection.default_strategy}")
-            result["valid"] = False
-
         if self.openai.max_tokens <= 0:
             result["errors"].append("OpenAI max_tokens必须大于0")
             result["valid"] = False
@@ -208,6 +218,9 @@ class GlobalConfig:
         if self.rag.embedding_backend not in ("vllm", "api"):
             result["errors"].append("rag_embedding_backend必须是 vllm 或 api")
             result["valid"] = False
+        if (self.rag.knowledge_retriever or "").strip().lower() not in ("chroma", "llamaindex"):
+            result["errors"].append("rag_knowledge_retriever必须是 chroma 或 llamaindex")
+            result["valid"] = False
 
         return result
 
@@ -216,7 +229,6 @@ class GlobalConfig:
             "openai": asdict(self.openai),
             "vllm_chat": asdict(self.vllm_chat),
             "vllm_embed": asdict(self.vllm_embed),
-            "detection": asdict(self.detection),
             "io": asdict(self.io),  # 添加 IOConfig 到字典
             "agent": asdict(self.agent),
             "rag": asdict(self.rag),
@@ -247,7 +259,6 @@ class GlobalConfig:
         openai_data = get_section(data, "openai", {})
         vllm_data = get_section(data, "vllm_chat", {})
         vllm_embed_data = get_section(data, "vllm_embed", {})
-        detection_data = get_section(data, "detection", {})
         agent_data = get_section(data, "agent", {})
         system_data = get_section(data, "system", {})
         rag_data = get_section(data, "rag", {})
@@ -303,7 +314,6 @@ class GlobalConfig:
             openai=OpenAIConfig(**openai_data),
             vllm_chat=VLLMChatConfig(**vllm_data),
             vllm_embed=VLLMEmbedConfig(**vllm_embed_data),
-            detection=DetectionConfig(**detection_data),
             agent=AgentConfig(**normalize_agent_data(agent_data)),
             rag=RAGConfig(
                 chunk_max_chars=rag_data.get("chunk_max_chars", 800),
@@ -316,6 +326,7 @@ class GlobalConfig:
                     "rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"
                 ),
                 embedding_backend=rag_data.get("embedding_backend", "vllm"),
+                knowledge_retriever=rag_data.get("knowledge_retriever", "chroma"),
                 api_embed_base_url=rag_data.get("api_embed_base_url", "https://api.openai.com/v1"),
                 api_embed_model=rag_data.get("api_embed_model", "text-embedding-3-small"),
             ),
@@ -380,12 +391,6 @@ def print_config(config: GlobalConfig):
     print(f"  Embedding Backend: {config.rag.embedding_backend}")
     print(f"  API Embed Base URL: {config.rag.api_embed_base_url}")
     print(f"  API Embed Model: {config.rag.api_embed_model}")
-
-    print("\n[Detection]")
-    print(f"  Default Strategy: {config.detection.default_strategy}")
-    print(f"  Fallback Enabled: {config.detection.fallback_enabled}")
-    print(f"  Auto Fallback: {config.detection.auto_fallback}")
-    print(f"  Max Concurrent: {config.detection.max_concurrent}")
 
     print("\n[Agent]")
     print(f"  Name: {config.agent.name}")

@@ -16,14 +16,17 @@ RTSP → 抽帧 → YOLO → Event Trigger → Agent (仅在状态转换时)
 import logging
 from typing import Optional, Callable, List, Dict, Any
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 import signal
 import sys
 import threading
+import json
+import time
 
 from config import MonitoringConfig
+from config import config as global_config
 from src.system.event_trigger import EventTrigger, EventTriggerConfig, DetectionEvent, MonitorState
 
 # 创建 agent 日志目录
@@ -190,7 +193,27 @@ class MonitoringSystem:
             )
         )
         logger.info("✓ 事件触发器初始化完成")
-    
+
+        # 4. 事件记录 (case store)
+        from src.context_engine.memory.case_memory import CaseMemoryStore
+        from src.context_engine.memory.vector_memory import VectorMemoryStore
+        cache_dir = Path(getattr(self.config, "cache_dir", "./cache"))
+        self.case_store = CaseMemoryStore(cache_dir / "event_cases.jsonl")
+        self.vector_memory = None
+        if bool(getattr(getattr(global_config, "rag", None), "enable_vector_memory", False)):
+            try:
+                self.vector_memory = VectorMemoryStore(cache_dir / "vector_memory")
+                logger.info("✓ 向量事件记忆已启用")
+            except Exception as exc:
+                logger.warning(f"向量事件记忆初始化失败，将仅使用JSONL记忆: {exc}")
+        self._monitor_status_path = cache_dir / "monitor_status.json"
+        self._last_status_write_ts = 0.0
+        self._risk_samples_path = cache_dir / "risk_samples.jsonl"
+        self._last_risk_sample_ts = 0.0
+        self._last_detection_frame_save_ts = 0.0
+        self._last_prune_ts = 0.0
+        logger.info("✓ 事件记录初始化完成")
+
     # 已移除模拟组件逻辑，组件导入失败将直接抛出异常
     
     # ========================================================================
@@ -266,108 +289,160 @@ class MonitoringSystem:
     # ========================================================================
     
     def _run_loop(self):
-        """主监控循环"""
+        """主监控循环（YOLO 逐帧检测）"""
         logger.info("进入主循环")
-        
         for frame in self.frame_extractor.stream():
-            # 检查停止信号
             if self._stop_event.is_set():
                 break
-            
-            # 处理暂停
             while self._pause_event.is_set():
                 if self._stop_event.is_set():
                     break
                 threading.Event().wait(0.1)
-            
             if self._stop_event.is_set():
                 break
-            
+
             self.stats.frame_count += 1
-            
             try:
-                # Step 1: YOLO 检测
                 detections = self.detector.detect(frame)
-                
-                # Step 2: 事件触发判断
-                should_call_agent, event = self.event_trigger.process_detection(
-                    detections, frame
-                )
-                
-                # Step 3: 定期打印日志
+                should_call_agent, event = self.event_trigger.process_detection(detections, frame)
+                self._maybe_write_monitor_status(detections)
+                self._maybe_write_risk_sample(detections)
                 if self.stats.frame_count % self.config.log_interval == 0:
                     self._log_stats()
-                
-                # Step 4: 如果触发事件，调用 Agent
                 if should_call_agent and event is not None:
                     self._process_event(event)
-                
-                # Step 5: 保存检测帧（可选）
                 if self.config.save_detection_frames and detections:
-                    self._save_detection_frame(frame, detections)
-            
+                    self._maybe_save_detection_frame(frame, detections)
+                self._maybe_prune_outputs()
             except Exception as e:
                 logger.error(f"处理帧异常: {e}", exc_info=True)
                 self.stats.error_count += 1
                 self._handle_error(f"处理帧异常: {e}")
+
+        # Best-effort final status write
+        try:
+            self._write_monitor_status(last_filtered_count=0)
+        except Exception:
+            pass
+        try:
+            self._append_risk_sample(
+                risk=0.0, fire=0.0, target=0.0, severity="info", state=MonitorState.IDLE.value
+            )
+        except Exception:
+            pass
+
+    def _maybe_write_monitor_status(self, detections: List[Dict[str, Any]]) -> None:
+        """Write monitor status periodically for the dashboard (shared via cache file)."""
+        now = time.time()
+        if now - getattr(self, "_last_status_write_ts", 0.0) < 1.0:
+            return
+        cfg = getattr(self.event_trigger, "config", None)
+        try:
+            target_classes = set(getattr(cfg, "target_classes", []) or [])
+            min_conf = float(getattr(cfg, "min_confidence", 0.0))
+            filtered_count = sum(
+                1
+                for d in (detections or [])
+                if isinstance(d, dict)
+                and d.get("class") in target_classes
+                and float(d.get("confidence", 0.0) or 0.0) >= min_conf
+            )
+        except Exception:
+            filtered_count = 0
+        self._write_monitor_status(last_filtered_count=filtered_count)
+        self._last_status_write_ts = now
+
+    def _maybe_write_risk_sample(self, detections: List[Dict[str, Any]]) -> None:
+        """Append a risk sample at most once per 3 minutes (for trend chart)."""
+        now = time.time()
+        if now - getattr(self, "_last_risk_sample_ts", 0.0) < 180.0:
+            return
+        risk, fire, target, severity, state = self._compute_risk_snapshot(detections)
+        self._append_risk_sample(
+            risk=risk, fire=fire, target=target, severity=severity, state=state
+        )
+        self._last_risk_sample_ts = now
+
+    def _compute_risk_snapshot(self, detections: List[Dict[str, Any]]) -> tuple[float, float, float, str, str]:
+        """Compute a single snapshot from current frame detections + state machine."""
+        cfg = getattr(self.event_trigger, "config", None)
+        target_classes = set(getattr(cfg, "target_classes", []) or [])
+        min_conf = float(getattr(cfg, "min_confidence", 0.0))
+        filtered = [
+            d
+            for d in (detections or [])
+            if isinstance(d, dict)
+            and d.get("class") in target_classes
+            and float(d.get("confidence", 0.0) or 0.0) >= min_conf
+        ]
+        fire = max((float(d.get("confidence", 0.0) or 0.0) for d in filtered), default=0.0) * 100.0
+        target = float(len(filtered))
+        state = getattr(self.event_trigger, "state", MonitorState.IDLE).value
+        severity = "critical" if state == MonitorState.ALARM.value else ("warning" if state == MonitorState.SUSPECT.value else "info")
+        sev_bonus = 20.0 if severity == "critical" else (10.0 if severity == "warning" else 0.0)
+        risk = min(100.0, fire * 0.7 + target * 3.0 + sev_bonus)
+        return float(risk), float(fire), float(min(target * 6.0, 100.0)), severity, str(state)
+
+    def _append_risk_sample(self, *, risk: float, fire: float, target: float, severity: str, state: str) -> None:
+        path: Path = getattr(self, "_risk_samples_path", Path("./cache/risk_samples.jsonl"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "risk": round(float(risk), 1),
+            "fire": round(float(fire), 1),
+            "target": round(float(target), 1),
+            "severity": str(severity),
+            "state": str(state),
+        }
+        # Append JSONL, keep size bounded (best-effort)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        try:
+            if path.stat().st_size > 2_000_000:  # ~2MB
+                lines = path.read_text(encoding="utf-8").splitlines()[-5000:]
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    def _write_monitor_status(self, *, last_filtered_count: int) -> None:
+        payload = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "state": getattr(self.event_trigger, "state", MonitorState.IDLE).value,
+            "detection_streak": int(getattr(self.event_trigger, "detection_count", 0)),
+            "no_detection_streak": int(getattr(self.event_trigger, "no_detection_count", 0)),
+            "last_filtered_count": int(max(last_filtered_count, 0)),
+            "frame_count": int(self.stats.frame_count),
+            "fps": float(self.stats.get_fps()),
+        }
+        path: Path = getattr(self, "_monitor_status_path", Path("./cache/monitor_status.json"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
     
     def _process_event(self, event: DetectionEvent):
-        """处理事件，支持可选保存帧，内存分析，调用 Agent（异步）"""
+        """处理事件：保存帧、写记录，后台做一次轻量 VL 描述。"""
         self.stats.event_count += 1
         logger.info(f"⚡ 事件 #{self.stats.event_count}: {event.state.value}")
 
         try:
-            # 控制分支：是否保存事件帧
             save_frame = getattr(self.config, 'save_event_frames', True)
             if save_frame and event.frame is not None:
-                self._save_event_frame(event)
-
-            # 异步调用 Agent（在后台线程执行，不阻塞主循环）
-            event_id = getattr(event, 'event_id', None)
-            tool_args = {"event_id": event_id} if event_id else None
-
-            agent_thread = threading.Thread(
-                target=self._process_event_async,
-                args=(event, tool_args),
-                daemon=True,
-                name=f"AgentThread-{event_id}"
-            )
-            agent_thread.start()
-            self._agent_threads.append(agent_thread)
-
-            # 清理已完成的线程
-            self._agent_threads = [t for t in self._agent_threads if t.is_alive()]
-
-            logger.debug(f"Agent 线程已启动，当前活跃线程: {len(self._agent_threads)}")
+                saved_path = self._save_event_frame(event)
+                event_id = getattr(event, 'event_id', None)
+                if saved_path and event_id:
+                    t = threading.Thread(
+                        target=self._vl_summarize_event,
+                        args=(event_id, saved_path),
+                        daemon=True,
+                    )
+                    t.start()
 
         except Exception as e:
             logger.error(f"处理事件异常: {e}", exc_info=True)
             self.stats.error_count += 1
             self._handle_error(str(e))
 
-    def _process_event_async(self, event: DetectionEvent, tool_args: Optional[Dict[str, Any]] = None):
-        """异步执行 Agent 处理（在后台线程中运行）"""
-        try:
-            # 调用 Agent（接口层）
-            response = self.agent_interface.handle_event(event, tool_args=tool_args)
-
-            # 更新统计
-            if response.severity == "critical":
-                self.stats.alarm_count += 1
-            elif response.severity == "warning":
-                self.stats.warning_count += 1
-
-            # 调用用户回调
-            if self.on_event:
-                try:
-                    self.on_event(event, response)
-                except Exception as e:
-                    logger.error(f"事件回调异常: {e}")
-
-        except Exception as e:
-            logger.error(f"Agent 异步处理失败: {e}", exc_info=True)
-            self.stats.error_count += 1
-            self._handle_error(str(e))
     
     def handle_user_query(self, query: str, context: Optional[Dict[str, Any]] = None) -> Any:
         """
@@ -518,12 +593,177 @@ class MonitoringSystem:
                 setattr(event, 'event_id', event_id)
             filename = f"{event_id}.jpg"
             filepath = os.path.join(self.config.output_dir, filename)
-            cv2.imwrite(filepath, event.frame)
+            # Use higher JPEG quality to avoid visible artifacts in saved frames
+            cv2.imwrite(filepath, event.frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
             # 注册到 FrameRegistry
             frame_registry.register(event_id, filepath)
             logger.info(f"💾 事件帧已保存: {filepath} (event_id={event_id})")
+
+            # 写入事件记录，供前端仪表盘展示
+            from src.context_engine.memory.case_memory import CaseRecord, extract_labels
+            detections = getattr(event, 'detections', []) or []
+            confidence = max((d.get("confidence", 0) for d in detections), default=0.0)
+            severity = "critical" if event.state.value == "alarm" else "warning"
+            # Store path relative to OUTPUTS_DIR (default: ./outputs)
+            try:
+                outputs_root = Path("./outputs").resolve()
+                rel_image_path = str(Path(filepath).resolve().relative_to(outputs_root)).replace("\\", "/")
+            except Exception:
+                rel_image_path = ""
+            yolo_labels = extract_labels(detections)
+            yolo_evidence = {
+                "confidence": confidence,
+                "detection_count": len(detections),
+                "labels": yolo_labels,
+            }
+            if bool(getattr(self.config, "persist_yolo_detections", False)):
+                yolo_evidence["detections"] = detections
+            if bool(getattr(self.config, "persist_yolo_raw", False)):
+                try:
+                    outputs_root = Path("./outputs").resolve()
+                    yolo_raw_dir = outputs_root / "yolo" / "raw"
+                    yolo_raw_dir.mkdir(parents=True, exist_ok=True)
+                    raw_path = yolo_raw_dir / f"{event_id}.json"
+                    raw_path.write_text(json.dumps(detections, ensure_ascii=False), encoding="utf-8")
+                    yolo_evidence["raw_path"] = str(raw_path.relative_to(outputs_root)).replace("\\", "/")
+                except Exception as exc:
+                    logger.warning(f"YOLO 原始结果落盘失败 ({event_id}): {exc}")
+
+            record = CaseRecord(
+                event_id=event_id,
+                timestamp=event.timestamp.isoformat(),
+                state=event.state.value,
+                severity=severity,
+                confidence=confidence,
+                detection_count=len(detections),
+                labels=yolo_labels,
+                summary="",
+                image_path=rel_image_path,
+                yolo=yolo_evidence,
+                vl={},
+                final={
+                    # Use YOLO-triggered verdict initially; VL may override later.
+                    "verdict": "fire",
+                    "reviewed": False,
+                    "severity": severity,
+                    "confidence": confidence,
+                    "reason": "triggered_by_yolo",
+                    "decided_by": "yolo",
+                },
+            )
+            self.case_store.add(record)
+            if self.vector_memory is not None:
+                try:
+                    self.vector_memory.add(record, memory_type="event")
+                except Exception as exc:
+                    logger.warning(f"向量事件记忆写入失败（已忽略）({event_id}): {exc}")
+            return filepath
         except Exception as e:
             logger.error(f"保存事件帧失败: {e}")
+            return None
+
+    def _vl_summarize_event(self, event_id: str, image_path: str):
+        """后台线程：对事件帧调用 detect_image，把 description 写入 summary。"""
+        try:
+            from src.tools.detections import detect_image, extract_description, safe_parse_json, draw_bboxes
+            raw = detect_image.invoke({"input_image": image_path})
+            # Persist raw VL output for debugging/audit
+            try:
+                outputs_root = Path("./outputs").resolve()
+                raw_dir = outputs_root / "vl" / "raw"
+                raw_dir.mkdir(parents=True, exist_ok=True)
+                raw_path = raw_dir / f"{event_id}.json"
+                raw_path.write_text(str(raw), encoding="utf-8")
+                rel_raw = str(raw_path.relative_to(outputs_root)).replace("\\", "/")
+                self.case_store.update_media(event_id, vl_raw_path=rel_raw)
+            except Exception as exc:
+                logger.warning(f"VL 原始结果落盘失败 ({event_id}): {exc}")
+            summary = extract_description(raw)
+            if summary:
+                self.case_store.update_summary(event_id, summary)
+                logger.info(f"📝 VL 描述已写入 {event_id}: {summary[:60]}...")
+            try:
+                dets = safe_parse_json(raw)
+                if dets:
+                    annotated_path = draw_bboxes(image_path, dets)
+                    if annotated_path and annotated_path != image_path:
+                        try:
+                            outputs_root = Path("./outputs").resolve()
+                            rel_vl_path = str(Path(annotated_path).resolve().relative_to(outputs_root)).replace("\\", "/")
+                        except Exception:
+                            rel_vl_path = ""
+                        if rel_vl_path:
+                            self.case_store.update_media(event_id, vl_image_path=rel_vl_path)
+                    try:
+                        vl_labels = sorted(
+                            {
+                                str(d.get("label") or d.get("class") or "").strip()
+                                for d in dets
+                                if isinstance(d, dict) and (d.get("label") or d.get("class"))
+                            }
+                        )
+                        if vl_labels:
+                            self.case_store.update_fields(event_id, detection_count=len(dets), labels=vl_labels)
+                    except Exception:
+                        pass
+                # Update VL evidence + final verdict (simple heuristic)
+                try:
+                    self.case_store.update_media(event_id, vl_raw_path=str(rel_raw) if "rel_raw" in locals() else None)
+                except Exception:
+                    pass
+
+                verdict, reviewed, reason = self._decide_final_verdict(summary or "", dets or [])
+                if verdict != "unknown":
+                    final_sev = "info" if verdict == "non_fire" else "critical"
+                else:
+                    final_sev = None
+                self.case_store.update_final(
+                    event_id,
+                    verdict=verdict,
+                    reviewed=reviewed,
+                    severity=final_sev,
+                    reason=reason,
+                    decided_by="vl",
+                )
+                # Upsert the updated record into vector memory for better retrieval.
+                if self.vector_memory is not None:
+                    try:
+                        rec = self.case_store.get(event_id)
+                        if rec is not None:
+                            self.vector_memory.add(rec, memory_type="event")
+                    except Exception as exc:
+                        logger.warning(f"向量事件记忆更新失败（已忽略）({event_id}): {exc}")
+            except Exception as exc:
+                logger.warning(f"VL 标注图生成失败 ({event_id}): {exc}")
+        except Exception as e:
+            logger.warning(f"VL 描述失败 ({event_id}): {e}")
+
+    @staticmethod
+    def _decide_final_verdict(summary: str, vl_dets: List[Dict[str, Any]]) -> tuple[str, bool, str]:
+        """Heuristic: decide fire/non_fire/unknown from VL summary + labels.
+
+        Conservative: only flip to non_fire when stage-lighting cues are strong and fire cues absent.
+        """
+        text = (summary or "").lower()
+        labels = []
+        for d in (vl_dets or []):
+            if isinstance(d, dict):
+                lab = d.get("label") or d.get("class")
+                if lab:
+                    labels.append(str(lab).lower())
+        label_text = " ".join(labels)
+
+        fire_pos = ("火", "明火", "火焰", "起火", "着火", "燃烧", "火灾", "浓烟", "烟雾")
+        stage_neg = ("演唱会", "舞台", "灯光", "特效", "观众", "表演", "烟雾机", "屏幕", "氛围", "过曝")
+
+        has_fire = any(k in text for k in fire_pos) or any(k in label_text for k in ("fire", "smoke", "flame"))
+        has_stage = any(k in text for k in stage_neg)
+
+        if has_fire and not has_stage:
+            return "fire", True, "vl_fire_cues"
+        if has_stage and not has_fire:
+            return "non_fire", True, "vl_stage_lighting_cues"
+        return "unknown", False, "insufficient_vl_signal"
     
     def _save_detection_frame(self, frame, detections):
         """保存检测帧"""
@@ -567,6 +807,66 @@ class MonitoringSystem:
         
         except Exception as e:
             logger.error(f"保存检测帧失败: {e}")
+
+    def _maybe_save_detection_frame(self, frame, detections) -> None:
+        """Rate-limit detection snapshot saving to avoid output explosion."""
+        interval = int(getattr(self.config, "detection_save_interval", 0) or 0)
+        if interval <= 0:
+            return
+        now = time.time()
+        if now - getattr(self, "_last_detection_frame_save_ts", 0.0) < float(interval):
+            return
+        self._save_detection_frame(frame, detections)
+        self._last_detection_frame_save_ts = now
+
+    def _maybe_prune_outputs(self) -> None:
+        """Prune old images periodically based on retention settings."""
+        interval = int(getattr(self.config, "prune_interval_seconds", 60) or 60)
+        if interval <= 0:
+            return
+        now = time.time()
+        if now - getattr(self, "_last_prune_ts", 0.0) < float(interval):
+            return
+
+        try:
+            alarm_dir = Path(self.config.output_dir).resolve()
+            outputs_root = Path("./outputs").resolve()
+            # Legacy: older builds stored annotated images under outputs/agent
+            agent_dir = outputs_root / "agent"
+            vl_annot_dir = outputs_root / "vl" / "annotated"
+            vl_raw_dir = outputs_root / "vl" / "raw"
+            yolo_raw_dir = outputs_root / "yolo" / "raw"
+            det_dir = alarm_dir / "detections"
+
+            self._prune_dir(alarm_dir, keep=int(getattr(self.config, "max_event_images", 0) or 0))
+            self._prune_dir(det_dir, keep=int(getattr(self.config, "max_detection_images", 0) or 0))
+            self._prune_dir(agent_dir, keep=int(getattr(self.config, "max_agent_images", 0) or 0))
+            self._prune_dir(vl_annot_dir, keep=int(getattr(self.config, "max_agent_images", 0) or 0))
+            self._prune_dir(vl_raw_dir, keep=int(getattr(self.config, "max_vl_raw_files", 0) or 0))
+            self._prune_dir(yolo_raw_dir, keep=int(getattr(self.config, "max_yolo_raw_files", 0) or 0))
+        except Exception as exc:
+            logger.warning(f"输出清理失败（已忽略）: {exc}")
+        finally:
+            self._last_prune_ts = now
+
+    @staticmethod
+    def _prune_dir(dir_path: Path, *, keep: int) -> None:
+        """Keep only newest N image files under dir_path (best-effort)."""
+        if keep <= 0:
+            return
+        if not dir_path.exists() or not dir_path.is_dir():
+            return
+        files = []
+        for pat in ("*.jpg", "*.jpeg", "*.png", "*.json", "*.txt"):
+            files.extend([p for p in dir_path.glob(pat) if p.is_file()])
+        if len(files) <= keep:
+            return
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in files[keep:]:
+            try:
+                p.unlink()
+            except Exception:
+                continue
     
     def _setup_signal_handlers(self):
         """设置信号处理器"""
@@ -584,13 +884,6 @@ class MonitoringSystem:
         """清理资源"""
         logger.info("清理资源...")
 
-        # 等待所有 Agent 线程完成（最多等待10秒）
-        if self._agent_threads:
-            logger.info(f"等待 {len(self._agent_threads)} 个 Agent 线程完成...")
-            for thread in self._agent_threads:
-                thread.join(timeout=10.0)
-            logger.info("所有 Agent 线程已完成")
-
         try:
             self.frame_extractor.disconnect()
         except Exception as e:
@@ -606,4 +899,3 @@ class MonitoringSystem:
             f"  错误数: {self.stats.error_count}\n"
             f"  运行时间: {self.stats.get_uptime_seconds():.1f}s"
         )
-

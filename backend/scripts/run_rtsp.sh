@@ -14,7 +14,7 @@ RTSP_PORT=8554
 STREAM_NAME="mystream"
 
 # 本地视频文件路径
-VIDEO_FILE="/home/yuan0165/yyh/Monitoring-Agent/backend/src/streaming/sun.mp4"
+VIDEO_FILE="/home/yuan0165/yyh/Monitoring-Agent/backend/src/streaming/fire.mp4"
 
 # 静态编译 ffmpeg 路径
 FFMPEG_BIN="/home/yuan0165/ffmpeg-7.0.2-amd64-static/ffmpeg"

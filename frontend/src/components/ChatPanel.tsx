@@ -17,9 +17,22 @@ interface Message {
   streaming?: boolean;
   steps?: StreamStep[];
   stepsOpen?: boolean;
+  imageUrls?: string[];
 }
 
-type RetrievalTarget = "event" | "chat" | "knowledge";
+/** Convert backend file paths like "./outputs/agent/xxx.jpg" to "/api/outputs/agent/xxx.jpg" */
+function toImageUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (normalized.startsWith("outputs/")) {
+    return `/api/${normalized}`;
+  }
+  // Absolute path: extract everything after "outputs/"
+  const idx = normalized.indexOf("outputs/");
+  if (idx !== -1) {
+    return `/api/${normalized.slice(idx)}`;
+  }
+  return filePath;
+}
 
 const SEV_COLOR: Record<string, string> = {
   critical: "var(--red)",
@@ -80,7 +93,7 @@ function ToolSteps({ steps, open, onToggle, streaming }: {
         <span>{streaming ? "工具执行中…" : `工具调用 · ${steps.length} 步`}</span>
       </button>
       {open && steps.length > 0 && (
-        <div className="max-h-44 overflow-y-auto p-2 space-y-1"
+        <div className="overflow-y-auto p-2 space-y-1"
           style={{ background: "rgba(0,0,0,0.04)" }}>
           {steps.map((s, i) => (
             <div key={i} className="flex gap-1.5 text-[10px] leading-relaxed">
@@ -132,13 +145,10 @@ const mdComponents = {
 export default function ChatPanel() {
   const [messages, setMessages] = useState<Message[]>([{
     role: "assistant",
-    content: "您好，我是 FireGuard AI 助手。可以帮您分析监控事件、查询历史告警、评估火灾风险。",
+    content: "您好，我是火灾与安防监控专业助手（SafeGuard Fire Assistant）。可以帮您分析监控事件、查询历史告警、评估火灾风险。",
   }]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [enableMemory, setEnableMemory] = useState(false);
-  const [enableCaseRetrieval, setEnableCaseRetrieval] = useState(false);
-  const [enableKnowledgeRetrieval, setEnableKnowledgeRetrieval] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -157,17 +167,11 @@ export default function ChatPanel() {
     setMessages(p => [...p, { role: "assistant", content: "", streaming: true, steps: [], stepsOpen: true }]);
 
     try {
-      const retrievalTargets: RetrievalTarget[] = [
-        ...(enableCaseRetrieval ? (["event", "chat"] as const) : []),
-        ...(enableKnowledgeRetrieval ? (["knowledge"] as const) : []),
-      ];
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query: q,
-          enable_memory: enableMemory,
-          retrieval_targets: retrievalTargets,
         }),
       });
       if (!res.ok || !res.body) {
@@ -192,9 +196,12 @@ export default function ChatPanel() {
               setMessages(p => p.map((m, i) =>
                 i === p.length - 1 ? { ...m, content: (m.content || "") + data.content } : m));
             } else if (data.type === "done") {
+              const imageUrls = Array.isArray(data.image_paths)
+                ? (data.image_paths as string[]).map(toImageUrl)
+                : undefined;
               setMessages(p => p.map((m, i) =>
                 i === p.length - 1
-                  ? { ...m, content: data.message || m.content || "（无回复）", severity: data.severity, streaming: false, stepsOpen: false }
+                  ? { ...m, content: data.message || m.content || "（无回复）", severity: data.severity, streaming: false, stepsOpen: false, imageUrls }
                   : m));
             } else if (data.type === "error") {
               setMessages(p => p.map((m, i) =>
@@ -228,27 +235,6 @@ export default function ChatPanel() {
       <div className="panel-hd">
         <span className="panel-title">🤖 AI 助手</span>
         <div className="ml-2 flex items-center gap-1.5">
-          <TogglePill
-            on={enableMemory}
-            label="上下文"
-            title="拼接本次会话的对话上下文"
-            icon="💬"
-            onClick={() => setEnableMemory(v => !v)}
-          />
-          <TogglePill
-            on={enableCaseRetrieval}
-            label="记忆"
-            title="检索历史事件/对话案例（case memory / vector memory）"
-            icon="🗃️"
-            onClick={() => setEnableCaseRetrieval(v => !v)}
-          />
-          <TogglePill
-            on={enableKnowledgeRetrieval}
-            label="知识库"
-            title="检索知识库片段（RAG）"
-            icon="📚"
-            onClick={() => setEnableKnowledgeRetrieval(v => !v)}
-          />
         </div>
         <span className="ml-auto rounded-full px-2 py-0.5 text-[9.5px] font-semibold"
           style={{ background: "var(--green-a)", color: "var(--green)" }}>在线</span>
@@ -273,7 +259,7 @@ export default function ChatPanel() {
                 }
               </div>
 
-              <div className="max-w-[88%] min-w-0">
+              <div className="min-w-0">
                 {/* Tool steps — only show when tools have actually been called */}
                 {!isUser && m.steps && m.steps.length > 0 && (
                   <ToolSteps steps={m.steps} open={m.stepsOpen ?? false}
@@ -310,6 +296,23 @@ export default function ChatPanel() {
                       <span className="inline-block w-0.5 h-3 ml-0.5 animate-pulse rounded-full align-middle"
                         style={{ background: "var(--t2)" }} />
                     )}
+                  </div>
+                )}
+
+                {/* Annotated images from tool output */}
+                {!isUser && m.imageUrls && m.imageUrls.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-2">
+                    {m.imageUrls.map((url, idx) => (
+                      <div key={idx} className="overflow-hidden rounded-xl"
+                        style={{ border: "0.5px solid var(--border)" }}>
+                        <img
+                          src={url}
+                          alt="检测标注图"
+                          className="w-full object-contain"
+                          style={{ display: "block", background: "rgba(0,0,0,0.04)" }}
+                        />
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

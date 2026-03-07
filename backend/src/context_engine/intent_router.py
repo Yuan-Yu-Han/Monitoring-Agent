@@ -21,6 +21,16 @@ class IntentPlan:
     reason: str = ""
 
 
+def _looks_like_event_id(query: str) -> bool:
+    q = (query or "").lower()
+    if "event_id" in q or "eventid" in q:
+        return True
+    # Common event_id pattern in this repo: 20260218_171730_alarm_ab12cd
+    if re.search(r"\b\d{8}_\d{6}\b", q):
+        return True
+    return False
+
+
 def route_intent(query: str, context_kind: str = "user", use_llm: bool = True) -> IntentPlan:
     normalized = (query or "").strip().lower()
     if not normalized:
@@ -38,27 +48,68 @@ def route_intent(query: str, context_kind: str = "user", use_llm: bool = True) -
 
 def _route_by_rules(query: str, context_kind: str) -> IntentPlan:
     days = parse_history_days(query)
-    history_kw = ("历史", "过去", "最近", "统计", "回顾", "history", "events", "past ", "last ")
-    knowledge_kw = ("怎么", "如何", "为什么", "处置", "建议", "步骤", "规范", "what", "why", "how", "？", "?")
+    history_kw = (
+        "历史", "过去", "最近", "统计", "回顾", "回溯", "查询", "搜索", "检索",
+        "history", "events", "past ", "last ", "latest", "recent",
+        "今天", "昨日", "昨天", "前天", "本周", "上周", "本月", "上个月",
+        "最新", "上一条",
+    )
+    event_kw = (
+        "告警", "报警", "事件", "记录", "火情", "烟雾", "火灾", "smoke", "fire",
+        "监控", "摄像头", "画面", "截图", "抓拍", "视频", "rtsp", "yolo",
+        "suspect", "warning", "alarm",
+    )
+    chat_kw = (
+        "你刚才", "你刚刚", "你之前", "你上次", "我们之前", "我们上次",
+        "刚才说", "前面说", "上面说", "提到过", "对话", "聊天", "聊天记录", "对话记录",
+    )
+    knowledge_kw = (
+        "怎么", "如何", "为什么", "处置", "建议", "步骤", "规范", "标准", "流程", "预案", "应急",
+        "what", "why", "how", "？", "?",
+    )
+
     has_history = days is not None or any(k in query for k in history_kw)
-    has_knowledge = any(k in query for k in knowledge_kw)
+    wants_event = _looks_like_event_id(query) or any(k in query for k in event_kw)
+    wants_chat = any(k in query for k in chat_kw)
+    wants_knowledge = any(k in query for k in knowledge_kw)
 
     if context_kind == "event":
         return IntentPlan(
             use_event_memory=True,
-            use_chat_memory=has_history,
+            use_chat_memory=has_history or wants_chat,
             use_knowledge_memory=True,
             days=days,
             reason="rule:event",
         )
 
-    if has_history:
+    # Explicitly asking about past/latest alarms/events/records: retrieve event memory.
+    if has_history and (wants_event or not wants_knowledge):
         return IntentPlan(
             use_event_memory=True,
-            use_chat_memory=True,
-            use_knowledge_memory=has_knowledge,
+            use_chat_memory=wants_chat,
+            use_knowledge_memory=wants_knowledge,
             days=days,
-            reason="rule:history",
+            reason="rule:history_event",
+        )
+
+    # Direct event-like query without time window (e.g. "最新告警是什么")
+    if wants_event and not wants_knowledge:
+        return IntentPlan(
+            use_event_memory=True,
+            use_chat_memory=wants_chat,
+            use_knowledge_memory=False,
+            days=days,
+            reason="rule:event_query",
+        )
+
+    # Chat-focused "remind me what I said" queries.
+    if wants_chat and not wants_event:
+        return IntentPlan(
+            use_event_memory=False,
+            use_chat_memory=True,
+            use_knowledge_memory=wants_knowledge,
+            days=days,
+            reason="rule:chat_query",
         )
 
     return IntentPlan(
@@ -88,6 +139,8 @@ def _route_by_llm(query: str, context_kind: str) -> Optional[IntentPlan]:
         "use_event_memory(boolean), use_chat_memory(boolean), use_knowledge_memory(boolean), days(number|null), reason(string)。"
         "当 query 是历史/统计/过去N天类，优先开启 event/chat memory。"
         "当 query 需要知识解释/步骤/规范时，开启 knowledge memory。"
+        "当 query 询问最新告警/报警/事件/记录时，开启 event memory。"
+        "当 query 询问'你刚才/你之前说过什么'时，开启 chat memory。"
         "如果 context_kind=event，一般需要 use_event_memory=true。"
     )
     payload = {

@@ -13,7 +13,7 @@
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -184,7 +184,7 @@ class EventTrigger:
         confidence = max([d.get("confidence", 0) for d in detections], default=0)
         
         return DetectionEvent(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             state=state,
             detections=detections,
             frame=frame,

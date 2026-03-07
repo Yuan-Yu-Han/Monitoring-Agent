@@ -70,7 +70,7 @@ def main() -> None:
     defaults = global_config.monitoring
     parser = argparse.ArgumentParser(description="Run monitoring system")
     parser.add_argument("--rtsp", type=str, default=defaults.rtsp_url)
-    parser.add_argument("--fps", type=int, default=defaults.rtsp_fps)
+    parser.add_argument("--fps", type=float, default=defaults.rtsp_fps)
     parser.add_argument("--model", type=str, default=defaults.yolo_model)
     parser.add_argument("--device", type=str, default=defaults.yolo_device)
     parser.add_argument("--interactive", action="store_true")

@@ -25,6 +25,65 @@ IMAGE_DIRS = [
 SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif", ".tiff"}
 
 
+def _resolve_image_path(event_id: str = None, query: str = None) -> Optional[str]:
+    """内部辅助：直接返回图片绝对路径，供 Skills 调用。未找到返回 None。"""
+    try:
+        if event_id:
+            # 1. 先查内存 registry（快速路径）
+            path = frame_registry.get(event_id)
+            if path and os.path.exists(path):
+                return path
+            # 2. Registry miss（TTL 过期或服务重启）时，按文件名扫描已知目录
+            fallback_dirs = [
+                Path(__file__).parent.parent.parent / "outputs" / "alarm",
+                Path(__file__).parent.parent.parent / "outputs" / "captures",
+                Path(__file__).parent.parent.parent / "outputs" / "agent",
+            ]
+            for d in fallback_dirs:
+                if not d.exists():
+                    continue
+                for ext in SUPPORTED_FORMATS:
+                    candidate = d / f"{event_id}{ext}"
+                    if candidate.exists():
+                        # 重新注册回内存，方便下次快速查找
+                        frame_registry.register(event_id, str(candidate))
+                        return str(candidate)
+            return None
+
+        if not query:
+            return None
+
+        if os.path.exists(query) and os.path.isfile(query):
+            return os.path.abspath(query)
+
+        query_lower = query.lower()
+        all_images: Dict[str, str] = {}
+        for d in IMAGE_DIRS:
+            if d.exists() and d.is_dir():
+                for f in d.rglob("*"):
+                    if f.is_file() and f.suffix.lower() in SUPPORTED_FORMATS:
+                        all_images[f.name.lower()] = str(f.absolute())
+
+        if query_lower in all_images:
+            return all_images[query_lower]
+
+        for name, path in all_images.items():
+            if query_lower in name:
+                return path
+
+        matches = sorted(
+            ((SequenceMatcher(None, query_lower, name).ratio(), path)
+             for name, path in all_images.items()),
+            reverse=True,
+        )
+        if matches and matches[0][0] > 0.4:
+            return matches[0][1]
+
+        return None
+    except Exception:
+        return None
+
+
 @tool
 def find_image(query: str = None, event_id: str = None, search_dirs: Optional[List[str]] = None) -> str:
     """

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class FrameExtractorConfig:
     """帧抽取器配置"""
     rtsp_url: str                       # RTSP 流地址
-    fps: int = 1                        # 抽帧频率（每秒抽取多少帧）
+    fps: float = 1.0                    # 抽帧频率（每秒抽取多少帧）
     resize_width: Optional[int] = None  # 缩放宽度（None 表示不缩放）
     resize_height: Optional[int] = None # 缩放高度
     reconnect_interval: int = 5         # 重连间隔（秒）
@@ -56,7 +56,9 @@ class RTSPFrameExtractor:
         self.config = config
         self.cap: Optional[cv2.VideoCapture] = None
         self.is_connected = False
-        self.frame_interval = 1.0 / config.fps  # 帧间隔（秒）
+        if float(config.fps) <= 0:
+            raise ValueError("FrameExtractorConfig.fps must be > 0")
+        self.frame_interval = 1.0 / float(config.fps)  # 帧间隔（秒）
         
     def connect(self) -> bool:
         """连接 RTSP 流"""
